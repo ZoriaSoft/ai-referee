@@ -6,8 +6,10 @@ export type ReviewProfile = "strict" | "light";
 
 export interface Finding {
   file: string;
-  /** Diff/new-file line number when the model gave one; null when it did not. */
+  /** End of the finding range — the diff/new-file line number the model cited; null when it gave none. */
   line: number | null;
+  /** Optional range start (multi-line finding); null for single-line findings. Always < line when set. */
+  startLine?: number | null;
   severity: Severity;
   message: string;
   suggestion?: string;

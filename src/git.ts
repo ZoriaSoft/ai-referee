@@ -70,11 +70,26 @@ export async function hasUncommittedChanges(cwd: string): Promise<boolean> {
 
 /**
  * Fetches a PR head via the portable `refs/pull/<n>/head` ref (works for forks
- * on GitHub) into FETCH_HEAD and returns its SHA.
+ * on GitHub) into a scratch ref `refs/ai-referee/pr-<n>` and returns its SHA.
+ * The namespaced ref + --no-write-fetch-head keep FETCH_HEAD untouched, so
+ * parallel reviews of different PRs cannot race each other. The scratch ref is
+ * dropped by dropPrRef once the review's worktree exists.
  */
 export async function fetchPrHead(cwd: string, pr: number): Promise<string> {
-  await git(cwd, `fetch origin ${shellEscape(`refs/pull/${pr}/head`)}`, 300_000);
-  return (await git(cwd, "rev-parse FETCH_HEAD")).trim();
+  const ref = `refs/ai-referee/pr-${pr}`;
+  // The "+" allows following force-pushed heads. FETCH_HEAD stays unwritten:
+  // parallel fetches share it otherwise and one review would read another's SHA.
+  await git(cwd, `fetch --no-write-fetch-head origin ${shellEscape(`+refs/pull/${pr}/head:${ref}`)}`, 300_000);
+  return (await git(cwd, `rev-parse ${shellEscape(ref)}`)).trim();
+}
+
+/** Removes the scratch ref fetchPrHead created; best-effort, never throws. */
+export async function dropPrRef(cwd: string, pr: number): Promise<void> {
+  try {
+    await git(cwd, `update-ref -d ${shellEscape(`refs/ai-referee/pr-${pr}`)}`);
+  } catch {
+    // already absent or concurrently removed — nothing to clean up
+  }
 }
 
 /** Creates a detached worktree at `ref`; caller removes it with removeWorktree. */
@@ -127,12 +142,24 @@ export async function ghListOpenPrs(cwd: string): Promise<GhPrSummary[]> {
       typeof (x as GhPrSummary).headRefOid === "string",
   );
 }
+export interface GhReviewComment {
+  path: string;
+  /** End (right-side) line of the comment; also the anchor for single-line comments. */
+  line: number;
+  side: "RIGHT";
+  /** Set for multi-line comments: the first line of the range. Requires start_side. */
+  start_line?: number;
+  start_side?: "RIGHT";
+  body: string;
+}
+
+
 
 export interface GhReviewPayload {
   commit_id: string;
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   body: string;
-  comments: { path: string; line: number; side: "RIGHT"; body: string }[];
+  comments: GhReviewComment[];
 }
 
 /**

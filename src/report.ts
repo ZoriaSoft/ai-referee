@@ -52,7 +52,7 @@ export function toMarkdown(report: GateReport): string {
   if (report.findings.length) {
     lines.push("", "## Findings", "");
     for (const f of report.findings) {
-      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      const loc = f.line ? (f.startLine ? `${f.file}:${f.startLine}-${f.line}` : `${f.file}:${f.line}`) : f.file;
       lines.push(`- **${SEVERITY_BADGE[f.severity] ?? f.severity.toUpperCase()}** \`${loc}\` — ${f.message}`);
       if (f.suggestion) lines.push(`  - hint: ${f.suggestion}`);
     }

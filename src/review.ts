@@ -103,6 +103,10 @@ export async function runReview(opts: ReviewOptions): Promise<GateReport> {
       await git.removeWorktree(cwd, target.worktree);
       await rm(target.worktree, { recursive: true, force: true });
     }
+    // Scratch ref from fetchPrHead; the worktree holds the objects, so the
+    // ref is only bookkeeping. Dropped best-effort — a leftover just gets
+    // overwritten by the next review of the same PR.
+    if (target.pr !== undefined) await git.dropPrRef(cwd, target.pr);
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anchorLine, buildPrReviewSet } from "../src/comments.js";
+import { anchorLine, anchorRange, buildPrReviewSet } from "../src/comments.js";
 import { parseDiff } from "../src/diff.js";
 import type { Finding, GateReport } from "../src/types.js";
 
@@ -81,6 +81,33 @@ describe("anchorLine", () => {
   });
 });
 
+describe("anchorRange", () => {
+  const ranged = (file: string, startLine: number | null, line: number | null): Finding => ({
+    file,
+    line,
+    startLine,
+    severity: "major",
+    message: "range problem",
+  });
+
+  it("keeps range starts that are diff lines strictly before the anchor", () => {
+    expect(anchorRange(ranged("src/a.ts", 2, 4), files)).toEqual({ line: 4, start: 2 });
+    expect(anchorRange(ranged("src/a.ts", 2, 11), files)).toEqual({ line: 11, start: 2 }); // across hunks
+  });
+
+  it("degrades to a single-line comment when the start misses the diff", () => {
+    expect(anchorRange(ranged("src/a.ts", 9, 11), files)).toEqual({ line: 11, start: null });
+    expect(anchorRange(ranged("src/a.ts", 11, 11), files)).toEqual({ line: 11, start: null });
+    expect(anchorRange(ranged("src/a.ts", 12, 11), files)).toEqual({ line: 11, start: null });
+  });
+
+  it("refuses to anchor at all when the end line misses the diff", () => {
+    expect(anchorRange(ranged("src/a.ts", 1, 99), files)).toBeNull();
+    expect(anchorRange(ranged("src/a.ts", null, null), files)).toBeNull();
+    expect(anchorRange(ranged("src/other.ts", 1, 2), files)).toBeNull();
+  });
+});
+
 describe("buildPrReviewSet", () => {
   it("maps REJECT to REQUEST_CHANGES with anchored inline comments", () => {
     const { payload, fileComments } = buildPrReviewSet(report([finding("src/a.ts", 2, "blocker")]), files);
@@ -90,6 +117,21 @@ describe("buildPrReviewSet", () => {
       { path: "src/a.ts", line: 2, side: "RIGHT", body: expect.stringContaining("BLOCKER") },
     ]);
     expect(fileComments).toEqual([]);
+  });
+
+  it("posts start_line+start_side for findings spanning diff lines", () => {
+    const f: Finding = { file: "src/a.ts", line: 4, startLine: 2, severity: "major", message: "spans" };
+    const { payload } = buildPrReviewSet(report([f]), files);
+    expect(payload.comments).toEqual([
+      {
+        path: "src/a.ts",
+        line: 4,
+        side: "RIGHT",
+        start_line: 2,
+        start_side: "RIGHT",
+        body: expect.stringContaining("spans"),
+      },
+    ]);
   });
 
   it("maps APPROVE to the APPROVE event", () => {

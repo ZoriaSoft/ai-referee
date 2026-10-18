@@ -5,6 +5,7 @@ const VERDICT_SCHEMA = `{
     {
       "file": "path/from/repo/root",
       "line": 123,
+      "start_line": 120,
       "severity": "blocker" | "major" | "minor" | "info",
       "message": "concrete problem, one or two sentences",
       "suggestion": "optional short fix hint"
@@ -28,6 +29,7 @@ const PROFILE_RULES: Record<ReviewProfile, string[]> = {
 };
 const PROFILE_TAIL = [
   "- Findings must cite file and (when possible) the new-file line number in the diff.",
+  '- When a finding spans a contiguous range, add "start_line" (first line); "line" stays the last.',
   "- Do not request changes outside this diff. Do not praise. Be terse.",
 ];
 

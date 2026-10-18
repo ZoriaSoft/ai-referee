@@ -134,9 +134,18 @@ function parseFindings(raw: unknown): Finding[] {
       typeof f.line === "number" && Number.isFinite(f.line) && f.line > 0
         ? Math.floor(f.line)
         : null;
+    // Multi-line range start ("start_line" per schema; tolerate "startLine").
+    // Dropped unless it is a positive integer strictly before `line` — a bad
+    // range is worse than no range.
+    const rawStart = f.start_line ?? f.startLine;
+    const startLine =
+      line !== null && typeof rawStart === "number" && Number.isInteger(rawStart) && rawStart > 0 && rawStart < line
+        ? rawStart
+        : null;
     const finding: Finding = {
       file: typeof f.file === "string" ? f.file : String(f.file ?? ""),
       line,
+      startLine,
       severity,
       message,
     };

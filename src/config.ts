@@ -70,6 +70,8 @@ export interface Config {
   contextBudget: number;
   /** Seconds between daemon polls. */
   daemonIntervalSec: number;
+  /** Open PRs the daemon may review at once. Default 1 (sequential). */
+  daemonConcurrency: number;
   /** Verify every REJECT with a second reviewer; an overruled rejection warns instead of blocking. Default false. */
   confirmRejections: boolean;
   /** Working directory for test/fix commands relative to repo root. */
@@ -99,6 +101,7 @@ export const DEFAULT_CONFIG: Config = {
   reviewConcurrency: 2,
   contextBudget: 40_000,
   daemonIntervalSec: 120,
+  daemonConcurrency: 1,
   confirmRejections: false,
   workdir: null,
 };
@@ -161,6 +164,7 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
   if ("reviewConcurrency" in raw) cfg.reviewConcurrency = num(raw.reviewConcurrency, "reviewConcurrency", path);
   if ("contextBudget" in raw) cfg.contextBudget = num(raw.contextBudget, "contextBudget", path);
   if ("daemonIntervalSec" in raw) cfg.daemonIntervalSec = num(raw.daemonIntervalSec, "daemonIntervalSec", path);
+  if ("daemonConcurrency" in raw) cfg.daemonConcurrency = num(raw.daemonConcurrency, "daemonConcurrency", path);
   if ("confirmRejections" in raw) cfg.confirmRejections = raw.confirmRejections === true;
   if ("workdir" in raw) cfg.workdir = raw.workdir === null ? null : str(raw.workdir, "workdir", path);
   return cfg;
@@ -257,6 +261,9 @@ function validateConfig(cfg: Config, path: string): void {
   }
   if (!Number.isInteger(cfg.reviewConcurrency) || cfg.reviewConcurrency < 1 || cfg.reviewConcurrency > 8) {
     throw new ConfigError(`${path}: "reviewConcurrency" must be an integer between 1 and 8`);
+  }
+  if (!Number.isInteger(cfg.daemonConcurrency) || cfg.daemonConcurrency < 1 || cfg.daemonConcurrency > 8) {
+    throw new ConfigError(`${path}: "daemonConcurrency" must be an integer between 1 and 8`);
   }
 }
 

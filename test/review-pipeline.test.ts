@@ -42,6 +42,7 @@ function cfg(overrides: Partial<Config>): Config {
     routes: [],
     contextBudget: 40_000,
     daemonIntervalSec: 120,
+    daemonConcurrency: 1,
     confirmRejections: false,
     workdir: null,
     ...overrides,

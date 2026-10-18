@@ -38,6 +38,7 @@ REVIEW OPTIONS
 
 DAEMON OPTIONS
   --interval <sec>    poll interval (default: config or 120)
+  --concurrency <n>   PRs reviewed in parallel (default: config or 1, max 8)
   --once              single poll, then exit
   --merge             auto-merge PRs that pass the gate
   --comment           post each verdict as a GitHub PR review
@@ -159,6 +160,7 @@ function parseCommon(rest: string[]) {
       out: { type: "string" },
       config: { type: "string" },
       interval: { type: "string" },
+      concurrency: { type: "string" },
       once: { type: "boolean", default: false },
       comment: { type: "boolean", default: false },
       confirm: { type: "boolean", default: false },
@@ -248,6 +250,7 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     postComments: v.comment || config.prComments,
     fix: v.fix,
     confirmRejections: v.confirm || undefined,
+    concurrency: v.concurrency ? Number.parseInt(v.concurrency, 10) : undefined,
     profile: profileFromFlags(v) ?? undefined,
   });
 }

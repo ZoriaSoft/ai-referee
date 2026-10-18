@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — round 6 (2026-10-18)
+
+### Added
+
+- Parallel PR reviews in the daemon: `daemonConcurrency` config (1–8, default
+  1) and `daemon --concurrency <n>`. One poll pass can now review a bounded
+  pool of PRs at once; each PR still gets its own temporary worktree and its
+  verdict is persisted independently — a failed review never starves the pool.
+- Multi-line inline comments: findings may report `start_line` (first line of
+  a contiguous range) alongside `line`. The verdict parser accepts
+  `start_line`/`startLine` and drops malformed or out-of-order ranges; a range
+  is posted as a GitHub `start_line`/`start_side` comment only when both ends
+  land on diff lines — otherwise it degrades to a single-line comment.
+  Markdown reports and review bodies render ranges as `file:start-end`.
+
+### Changed
+
+- PR head fetches no longer write `FETCH_HEAD`: `fetchPrHead` fetches
+  `+refs/pull/<n>/head` into a scratch ref `refs/ai-referee/pr-<n>`
+  (`--no-write-fetch-head`), which is dropped after the worktree exists.
+  Shared `FETCH_HEAD` was the race that blocked parallel reviews; the "+"
+  refspec also follows force-pushed heads instead of failing.
+- Daemon state saves are serialized through a queue and written atomically
+  (tmp file + rename): parallel workers can never tear the JSON file.
+
 
 
 ## [Unreleased] — round 5 (2026-10-18)

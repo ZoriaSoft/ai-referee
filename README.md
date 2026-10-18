@@ -45,10 +45,12 @@ npx ai-referee review --pr 137 --format markdown
 ```
 
 Post the verdict back to the PR as a GitHub review — findings that anchor to
-diff lines become inline comments, the rest go in the review body. Each posted
-review carries an invisible `ai-referee` marker; when a new head gets reviewed,
-superseded ai-referee `CHANGES_REQUESTED` reviews are dismissed automatically
-so an old rejection cannot block a fixed PR. Human reviews are never touched:
+diff lines become inline comments (a `start_line` range posts as a multi-line
+comment when both ends land in the diff), the rest go in the review body. Each
+posted review carries an invisible `ai-referee` marker; when a new head gets
+reviewed, superseded ai-referee `CHANGES_REQUESTED` reviews are dismissed
+automatically so an old rejection cannot block a fixed PR. Human reviews are
+never touched:
 
 ```bash
 npx ai-referee review --pr 137 --comment
@@ -73,9 +75,13 @@ Run a polling daemon that reviews every new PR head:
 npx ai-referee daemon --interval 120       # add --once for a single pass
 ```
 
-Polls run back-to-back, never overlapping: a slow review pass simply delays the
-next cycle. When `gh` fails, the poll interval backs off exponentially (up to
-8×) until the API recovers. To run it under systemd:
+Polls run back-to-back, never overlapping: a slow review pass simply delays
+the next cycle. When `gh` fails, the poll interval backs off exponentially
+(up to 8×) until the API recovers. One pass can review several PRs at once —
+`--concurrency 4` or `"daemonConcurrency": 4` (1–8, default 1). Parallel PRs
+are safe: each head is fetched into its own `refs/ai-referee/pr-<n>` ref
+(FETCH_HEAD is never shared) and reviewed in its own worktree. To run it
+under systemd:
 
 ```ini
 # ~/.config/systemd/user/ai-referee.service
@@ -228,6 +234,7 @@ When an `api` reviewer reports `usage`, token counts are summed into
 | `confirmRejections` | `false` | Second referee verifies each REJECT (overruled → warning); `--confirm` per run |
 | `workdir` | `null` | Subdirectory for test/fix commands (monorepos) |
 | `profile` | `"strict"` | Default prompt profile; `--light`/`--strict` override per run |
+| `daemonConcurrency` | 1 | PRs the daemon reviews at once (1–8); `--concurrency` per run |
 | `routes` | `[]` | Per-path reviewer routing (see above) |
 
 ## Commands

@@ -92,18 +92,27 @@ Owner decides.
 - [x] **`jsonMode` for api reviewers**: opt-in
       `response_format:{type:"json_object"}` for compatible endpoints.
 
+## Done — round 6
+
+- [x] **Daemon concurrency**: `--concurrency`/`daemonConcurrency` (1–8) runs a
+      bounded pool of PR reviews per poll. Races closed first: PR heads now
+      fetch into per-PR scratch refs `refs/ai-referee/pr-<n>` with
+      `--no-write-fetch-head` (FETCH_HEAD was the shared-write race), force-push
+      safe via `+refspec`; worktrees were already per-PR `mkdtemp`; state saves
+      are serialized through a queue and written atomically (tmp + rename).
+- [x] **Multi-line inline comments**: findings may carry `start_line` (schema
+      + prompt + parser; camelCase tolerated, bad ranges dropped). `anchorRange`
+      keeps a range only when both ends are diff lines — otherwise it degrades
+      to a single-line comment. Posted as `start_line`/`start_side` on the
+      GitHub review; report/comment bodies render `file:start-end`.
+
 ## Next (priority order)
 
 - [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
       to a route-matched fixer instead. (Deferred round 5 — few real setups
       need a second fixer; confirmation + file comments were higher value.)
 - [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
-- [ ] **Multi-line inline comments**: GitHub supports start_line+line ranges;
-      models would need to report line ranges, not single lines.
-- [ ] **Daemon concurrency**: PRs review sequentially today; a bounded pool
-      could overlap independent PR reviews. Blocked on a real race:
-      `git fetch refs/pull/<n>/head` writes shared `FETCH_HEAD` — parallel
-      reviews need serialized fetch (or fetch-into-per-PR ref) first.
+
 
 ## Known limits
 

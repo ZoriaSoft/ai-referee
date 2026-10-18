@@ -1,8 +1,8 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runDaemon, pollDelayMs } from "../src/daemon.js";
+import { runDaemon, pollDelayMs, runPool } from "../src/daemon.js";
 import { run } from "../src/exec.js";
 import type { Config } from "../src/config.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
@@ -85,5 +85,100 @@ describe("runDaemon --once", () => {
     expect(code).toBe(0);
     expect(logs.join(" ")).toContain("gh pr list failed");
     expect(logs.join(" ")).toContain("next poll in");
+  });
+});
+
+describe("runPool", () => {
+  it("caps in-flight work at the bound and drains every item once", async () => {
+    const gate = Promise.withResolvers<void>();
+    let inFlight = 0;
+    let peak = 0;
+    const done: number[] = [];
+    const pool = runPool([1, 2, 3, 4, 5], 2, async (n) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await gate.promise; // park workers: the bound must hold before release
+      inFlight--;
+      done.push(n);
+    });
+    // Workers run to the gate synchronously — exactly the bound is in flight.
+    expect(inFlight).toBe(2);
+    gate.resolve();
+    await pool;
+    expect(peak).toBe(2);
+    expect(done.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("never spawns more workers than items, and resolves an empty pool", async () => {
+    const gate = Promise.withResolvers<void>();
+    let inFlight = 0;
+    const pool = runPool([1, 2], 8, async () => {
+      inFlight++;
+      await gate.promise;
+    });
+    expect(inFlight).toBe(2); // min(8 workers, 2 items)
+    gate.resolve();
+    await pool;
+    await runPool([], 0, async () => {
+      throw new Error("must never run");
+    });
+  });
+
+  it("keeps draining when an item failure is caught inside fn (daemon contract)", async () => {
+    const done: number[] = [];
+    const errors: string[] = [];
+    await runPool([1, 2, 3], 3, async (n) => {
+      try {
+        if (n === 2) throw new Error("boom");
+        done.push(n);
+      } catch (err) {
+        errors.push((err as Error).message);
+      }
+    });
+    expect(done.sort()).toEqual([1, 3]);
+    expect(errors).toEqual(["boom"]);
+  });
+
+  it("propagates an uncaught failure", async () => {
+    await expect(
+      runPool([1], 1, async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+  });
+});
+
+describe("daemon state file", () => {
+  const statePath = (): string => join(dir, ".ai-referee", "daemon-state.json");
+
+  it("recovers from a corrupt state file", async () => {
+    await mkdir(join(dir, ".ai-referee"), { recursive: true });
+    await writeFile(statePath(), "not json{", "utf8");
+    await fakeGh("[]");
+    const code = await runDaemon({ cwd: dir, config: cfg(), intervalSec: 10, once: true, log: () => {} });
+    expect(code).toBe(0);
+    // A failed poll must not rewrite (or tear) the existing file.
+    expect(await readFile(statePath(), "utf8")).toBe("not json{");
+  });
+
+  it("writes no state and leaves no tmp files when every review fails", async () => {
+    await fakeGh(`[{"number":7,"title":"x","headRefOid":"deadbeef"}]`);
+    const logs: string[] = [];
+    const code = await runDaemon({
+      cwd: dir,
+      config: cfg(),
+      intervalSec: 10,
+      once: true,
+      log: (m) => logs.push(m),
+    });
+    expect(code).toBe(0);
+    expect(logs.join(" ")).toContain("review failed");
+    await expect(access(statePath())).rejects.toThrow(); // nothing persisted
+    try {
+      const leftovers = (await readdir(join(dir, ".ai-referee"))).filter((f) => f.endsWith(".tmp"));
+      expect(leftovers).toEqual([]);
+    } catch {
+      // no .ai-referee dir at all — also correct
+    }
   });
 });

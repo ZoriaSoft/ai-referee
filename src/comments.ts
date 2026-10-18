@@ -4,8 +4,12 @@ import type { Finding, GateReport } from "./types.js";
 /** One inline comment in a GitHub PR review (line = new-file line number). */
 export interface PrReviewComment {
   path: string;
+  /** Anchor (right-side) line — the last line of a range comment. */
   line: number;
   side: "RIGHT";
+  /** First line when the comment spans a range; requires start_side. */
+  start_line?: number;
+  start_side?: "RIGHT";
   body: string;
 }
 
@@ -36,21 +40,47 @@ function findingBody(f: Finding): string {
   return f.suggestion ? `${head}\n\n_hint: ${f.suggestion}_` : head;
 }
 
-/**
- * Anchors a finding to a new-file line that GitHub accepts for an inline
- * comment. Exact-path match preferred; a unique path-suffix match rescues
- * findings where the model abbreviated the path. Returns null when the
- * finding cannot be anchored (wrong file, line outside the diff, ambiguity).
- */
-export function anchorLine(f: Finding, files: FileDiff[]): number | null {
-  if (f.line === null || !Number.isInteger(f.line) || f.line <= 0) return null;
+/** `file:start-line` when a finding spans a range, `file:line`, else `file`. */
+function findingLoc(f: Finding): string {
+  if (f.line === null) return f.file;
+  return f.startLine ? `${f.file}:${f.startLine}-${f.line}` : `${f.file}:${f.line}`;
+}
+
+/** The diff file a finding anchors to: exact path, else unique suffix; never deleted/binary. */
+function anchorableFile(f: Finding, files: FileDiff[]): FileDiff | null {
   let file = files.find((d) => d.path === f.file);
   if (!file) {
     const suffix = files.filter((d) => d.path.endsWith(`/${f.file}`) || f.file.endsWith(`/${d.path}`));
     if (suffix.length === 1) file = suffix[0]!;
   }
-  if (!file || file.isDeleted || file.isBinary) return null;
-  return file.rightLines.has(f.line) ? f.line : null;
+  return file && !file.isDeleted && !file.isBinary ? file : null;
+}
+
+/**
+ * Anchors a finding to the new-file lines GitHub accepts for an inline
+ * comment. The anchor `line` must always be in the diff; `start` is kept
+ * only when it too is a diff line strictly before `line` — a range whose
+ * start GitHub rejects degrades to a single-line comment.
+ * Returns null when the finding cannot anchor at all (wrong file, line
+ * outside the diff, ambiguity).
+ */
+export function anchorRange(f: Finding, files: FileDiff[]): { line: number; start: number | null } | null {
+  if (f.line === null || !Number.isInteger(f.line) || f.line <= 0) return null;
+  const file = anchorableFile(f, files);
+  if (!file || !file.rightLines.has(f.line)) return null;
+  const start =
+    f.startLine != null && Number.isInteger(f.startLine) && f.startLine > 0 && f.startLine < f.line && file.rightLines.has(f.startLine)
+      ? f.startLine
+      : null;
+  return { line: f.line, start };
+}
+
+/**
+ * Anchors a finding to a new-file line that GitHub accepts for an inline
+ * comment. Kept for single-line callers; see anchorRange for range support.
+ */
+export function anchorLine(f: Finding, files: FileDiff[]): number | null {
+  return anchorRange(f, files)?.line ?? null;
 }
 
 /** One file-level PR review comment, posted via POST /pulls/{n}/comments. */
@@ -94,15 +124,20 @@ export function buildPrReviewSet(report: GateReport, files: FileDiff[]): PrRevie
   const unanchored: Finding[] = [];
 
   for (const f of report.findings) {
-    const line = anchorLine(f, files);
-    if (line !== null && comments.length < MAX_INLINE_COMMENTS) {
-      comments.push({ path: filePathFor(f, files), line, side: "RIGHT", body: findingBody(f) });
+    const anchor = anchorRange(f, files);
+    if (anchor !== null && comments.length < MAX_INLINE_COMMENTS) {
+      comments.push({
+        path: filePathFor(f, files),
+        line: anchor.line,
+        side: "RIGHT",
+        ...(anchor.start !== null ? { start_line: anchor.start, start_side: "RIGHT" as const } : {}),
+        body: findingBody(f),
+      });
       continue;
     }
     const file = resolveFile(f, files);
     if (file !== null && !file.isDeleted && !file.isBinary && fileComments.length < MAX_FILE_COMMENTS) {
-      const loc = f.line ? `${f.file}:${f.line}` : f.file;
-      fileComments.push({ path: file.path, body: `${findingBody(f)}\n\n_\`${loc}\`_` });
+      fileComments.push({ path: file.path, body: `${findingBody(f)}\n\n_\`${findingLoc(f)}\`_` });
       continue;
     }
     unanchored.push(f);
@@ -124,10 +159,10 @@ export function buildPrReviewSet(report: GateReport, files: FileDiff[]): PrRevie
   if (unanchored.length) {
     body.push("", "Findings without a diff anchor:");
     for (const f of unanchored) {
-      const loc = f.line ? `${f.file}:${f.line}` : f.file;
-      body.push(`- **${SEVERITY_LABEL[f.severity] ?? f.severity.toUpperCase()}** \`${loc}\` — ${f.message}`);
+      body.push(`- **${SEVERITY_LABEL[f.severity] ?? f.severity.toUpperCase()}** \`${findingLoc(f)}\` — ${f.message}`);
     }
   }
+
 
   return {
     payload: {

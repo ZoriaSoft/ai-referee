@@ -75,6 +75,13 @@ describe("loadConfig", () => {
     await expect(loadConfig(cwd)).rejects.toThrow(/chunkBudget/);
   });
 
+  it("rejects out-of-range daemonConcurrency", async () => {
+    await expect(loadConfig(await writeCfg(`{"daemonConcurrency": 0}`))).rejects.toThrow(/daemonConcurrency/);
+    await expect(loadConfig(await writeCfg(`{"daemonConcurrency": 99}`))).rejects.toThrow(/daemonConcurrency/);
+    const { config } = await loadConfig(await writeCfg(`{"daemonConcurrency": 3}`));
+    expect(config.daemonConcurrency).toBe(3);
+  });
+
   it("honours an explicit config path", async () => {
     const cwd = await writeCfg(`{"testCommand":"yes"}`);
     const { config } = await loadConfig(cwd, join(cwd, ".ai-referee.json"));

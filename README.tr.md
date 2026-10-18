@@ -45,7 +45,8 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
 - Markdown (TTY) ve JSON (pipe) rapor; `--format`, `--out`.
 - `--fix`: REJECT'te `fixerCommand`'ı bir kez çalıştırıp yeniden inceler.
 - `--comment`: PR'a GitHub review'ı olarak yazar — diff satırlarına denk gelen
-  bulgular satır içi yorum olur; satıra denk gelmeyip dosyası diff'te olanlar
+  bulgular satır içi yorum olur (`start_line` aralığı verilmişse ve iki uç da
+  diff'teyse çok satırlı yorum); satıra denk gelmeyip dosyası diff'te olanlar
   dosya seviyesi yoruma düşer, kalanlar review gövdesine girer. Yeni bir head
   incelendiğinde, eski commit'e ait ai-referee `CHANGES_REQUESTED` review'ları
   otomatik dismiss edilir; insan review'larına dokunulmaz.
@@ -58,7 +59,10 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
 - `daemon`: `gh pr list`'i yoklar, her yeni PR head'ini bir kez inceler,
   raporları `.ai-referee/reports/` altına yazar; `--comment` ile PR'a yazar.
   `gh` hatalarında yoklama aralığı üssel olarak geriler (en fazla 8×) ve
-  yoklamalar asla çakışmaz; systemd unit örneği README.md'de.
+  yoklamalar asla çakışmaz; `--concurrency` / `"daemonConcurrency"` (1–8)
+  ile bir geçişte birden çok PR paralel incelenir — her head kendi
+  `refs/ai-referee/pr-<n>` ref'ine çekilir (FETCH_HEAD paylaşılmaz) ve kendi
+  worktree'sinde değerlendirilir. systemd unit örneği README.md'de.
 - `hook install`: REJECT'te push'u durduran pre-push kancası kurar.
 - `--strict`/`--light`: inceleme profili — `strict` tam denetim yapar,
   `light` yalnız merge'i bozan hatalara takılır (çökme, veri kaybı, güvenlik

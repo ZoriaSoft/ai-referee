@@ -73,6 +73,28 @@ describe("parseVerdict", () => {
     expect(parsed.findings[1]!.severity).toBe("minor");
   });
 
+  it("parses start_line ranges, tolerating camelCase and dropping bad ranges", () => {
+    const v = (findings: unknown[]): string =>
+      JSON.stringify({ verdict: "REJECT", summary: "x", findings });
+    const f = (extra: Record<string, unknown>) => ({
+      file: "a.ts",
+      line: 10,
+      severity: "major",
+      message: "m",
+      ...extra,
+    });
+
+    expect(parseVerdict(v([f({ start_line: 7 })])).findings[0]!.startLine).toBe(7);
+    expect(parseVerdict(v([f({ startLine: 7 })])).findings[0]!.startLine).toBe(7);
+    // equal/after the anchor, non-integer or non-positive → dropped, not kept
+    for (const bad of [10, 11, 7.5, 0, -3, "7"]) {
+      expect(parseVerdict(v([f({ start_line: bad })])).findings[0]!.startLine).toBeNull();
+    }
+    // start without a usable line has nothing to range over
+    const noLine = { file: "a.ts", start_line: 7, severity: "major", message: "m" };
+    expect(parseVerdict(v([noLine])).findings[0]!.startLine).toBeNull();
+  });
+
   it("rejects empty output", () => {
     expect(() => parseVerdict("")).toThrow(VerdictParseError);
     expect(() => parseVerdict("   ")).toThrow(VerdictParseError);

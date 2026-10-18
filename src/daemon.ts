@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Config } from "./config.js";
 import * as git from "./git.js";
@@ -20,6 +20,8 @@ export interface DaemonOptions {
   profile?: "strict" | "light";
   /** Verify each REJECT with a second referee; defaults to config.confirmRejections. */
   confirmRejections?: boolean;
+  /** PRs reviewed in parallel per poll; defaults to config.daemonConcurrency. */
+  concurrency?: number;
   /** Written under <cwd>/.ai-referee/daemon-state.json */
   statePath?: string;
   log?: (msg: string) => void;
@@ -59,12 +61,23 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
     consecutiveFailures = 0;
     log(`${prs.length} open PR(s)`);
 
+    const due = prs.filter((pr) => state.reviewed[String(pr.number)]?.sha !== pr.headRefOid);
     for (const pr of prs) {
-      const prev = state.reviewed[String(pr.number)];
-      if (prev?.sha === pr.headRefOid) {
-        log(`#${pr.number} unchanged (${pr.headRefOid.slice(0, 8)}) — skipping`);
-        continue;
-      }
+      if (!due.includes(pr)) log(`#${pr.number} unchanged (${pr.headRefOid.slice(0, 8)}) — skipping`);
+    }
+
+    // Serialized saves: parallel workers mutate `state` between awaits, and a
+    // last-write-wins queue plus atomic rename keeps the file whole. A failed
+    // save is retried once as the rejection branch — the queue must self-heal,
+    // a single fs error cannot poison persistence for the rest of the poll.
+    let saveQueue: Promise<void> = Promise.resolve();
+    const persist = (): Promise<void> => {
+      const save = (): Promise<void> => saveState(statePath, state);
+      saveQueue = saveQueue.then(save, save);
+      return saveQueue;
+    };
+
+    const reviewOne = async (pr: (typeof due)[number]): Promise<void> => {
       log(`#${pr.number} ${pr.title} — reviewing ${pr.headRefOid.slice(0, 8)}`);
       try {
         const report = await runReview({
@@ -87,11 +100,14 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
           verdict: report.verdict,
           at: new Date().toISOString(),
         };
-        await saveState(statePath, state);
+        await persist();
       } catch (err) {
         log(`#${pr.number} review failed: ${(err as Error).message}`);
       }
-    }
+    };
+
+    const concurrency = Math.max(1, Math.min(8, Math.floor(opts.concurrency ?? config.daemonConcurrency)));
+    await runPool(due, Math.min(concurrency, due.length) || 1, reviewOne);
   };
 
   await poll();
@@ -127,6 +143,22 @@ export function pollDelayMs(baseMs: number, failures: number): number {
   return baseMs * Math.min(2 ** Math.max(0, failures - 1), 8);
 }
 
+/**
+ * Runs `fn` over `items` with at most `concurrency` in flight. Failures
+ * propagate as rejections — callers that need per-item isolation must catch
+ * inside `fn` (the daemon does; one bad PR must not starve the pool).
+ */
+export async function runPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const item = items[next++]!;
+      await fn(item);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, worker));
+}
+
 async function loadState(path: string): Promise<DaemonState> {
   try {
     const parsed = JSON.parse(await readFile(path, "utf8")) as DaemonState;
@@ -136,9 +168,15 @@ async function loadState(path: string): Promise<DaemonState> {
   }
 }
 
+/**
+ * Writes state atomically: tmp file + rename, so a crash mid-write or two
+ * queued saves can never leave a torn JSON file behind.
+ */
 async function saveState(path: string, state: DaemonState): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(state, null, 2), "utf8");
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2), "utf8");
+  await rename(tmp, path);
 }
 
 async function writeReport(cwd: string, pr: number, report: GateReport): Promise<void> {
