@@ -28,6 +28,20 @@ export interface ReviewerConfig {
   timeoutMs?: number;
 }
 
+/** Sends files matching globs to a named subset of the reviewer chain. */
+export interface RouteConfig {
+  /** Report label; defaults to the first glob. */
+  name?: string;
+  /** Path globs (same syntax as `exclude`); a file matching any glob takes this route. */
+  match: string[];
+  /** Names from the top-level `reviewers` list; tried in order for matching files. */
+  reviewers: string[];
+  /** Prompt profile override for this route; defaults to the run profile. */
+  profile?: "strict" | "light";
+  /** Extra review instructions injected into the prompt for matching files. */
+  instructions?: string;
+}
+
 export interface Config {
   /** Repo test command run inside the target worktree. Null disables the gate's test step. */
   testCommand: string | null;
@@ -37,6 +51,10 @@ export interface Config {
   /** Path patterns excluded from review (still counted in stats). */
   exclude: string[];
   reviewers: ReviewerConfig[];
+  /** Default prompt profile for unflagged runs; routes may override it. */
+  profile: "strict" | "light";
+  /** Per-path reviewer routing; files matching no route use the default chain. */
+  routes: RouteConfig[];
   /** Command that applies fixes; gets the findings on stdin, cwd = worktree. */
   fixerCommand: string | null;
   fixerTimeoutMs: number;
@@ -68,6 +86,8 @@ export const DEFAULT_CONFIG: Config = {
     "*.snap",
   ],
   reviewers: [],
+  profile: "strict",
+  routes: [],
   fixerCommand: null,
   fixerTimeoutMs: 10 * 60 * 1000,
   autoMerge: false,
@@ -119,6 +139,16 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
     if (!Array.isArray(raw.reviewers)) throw new ConfigError(`${path}: "reviewers" must be an array`);
     cfg.reviewers = raw.reviewers.map((x, i) => parseReviewer(x, `reviewers[${i}]`, path));
   }
+  if ("profile" in raw) {
+    if (raw.profile !== "strict" && raw.profile !== "light") {
+      throw new ConfigError(`${path}: "profile" must be "strict" or "light"`);
+    }
+    cfg.profile = raw.profile;
+  }
+  if ("routes" in raw) {
+    if (!Array.isArray(raw.routes)) throw new ConfigError(`${path}: "routes" must be an array`);
+    cfg.routes = raw.routes.map((x, i) => parseRoute(x, `routes[${i}]`, path));
+  }
   if ("fixerCommand" in raw) cfg.fixerCommand = raw.fixerCommand === null ? null : str(raw.fixerCommand, "fixerCommand", path);
   if ("fixerTimeoutMs" in raw) cfg.fixerTimeoutMs = num(raw.fixerTimeoutMs, "fixerTimeoutMs", path);
   if ("autoMerge" in raw) cfg.autoMerge = raw.autoMerge === true;
@@ -158,6 +188,33 @@ function parseReviewer(raw: unknown, where: string, path: string): ReviewerConfi
   return reviewer;
 }
 
+function parseRoute(raw: unknown, where: string, path: string): RouteConfig {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(`${path}: ${where} must be an object`);
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.match) || r.match.length === 0) {
+    throw new ConfigError(`${path}: ${where}.match must be a non-empty string array`);
+  }
+  const route: RouteConfig = {
+    match: r.match.map((x) => str(x, `${where}.match[]`, path)),
+    reviewers: [],
+  };
+  if (r.name !== undefined) route.name = str(r.name, `${where}.name`, path);
+  if (r.reviewers !== undefined) {
+    if (!Array.isArray(r.reviewers)) throw new ConfigError(`${path}: ${where}.reviewers must be an array`);
+    route.reviewers = r.reviewers.map((x) => str(x, `${where}.reviewers[]`, path));
+  }
+  if (r.profile !== undefined) {
+    if (r.profile !== "strict" && r.profile !== "light") {
+      throw new ConfigError(`${path}: ${where}.profile must be "strict" or "light"`);
+    }
+    route.profile = r.profile;
+  }
+  if (r.instructions !== undefined) route.instructions = str(r.instructions, `${where}.instructions`, path);
+  return route;
+}
+
 function validateConfig(cfg: Config, path: string): void {
   for (const r of cfg.reviewers) {
     if (r.type === "cli" && !r.command) {
@@ -165,6 +222,24 @@ function validateConfig(cfg: Config, path: string): void {
     }
     if (r.type === "api" && !r.url) {
       throw new ConfigError(`${path}: reviewer "${r.name}" is type "api" but has no "url"`);
+    }
+  }
+  const names = new Set<string>();
+  for (const r of cfg.reviewers) {
+    if (names.has(r.name)) {
+      throw new ConfigError(`${path}: duplicate reviewer name "${r.name}" — routes reference reviewers by name`);
+    }
+    names.add(r.name);
+  }
+  for (const route of cfg.routes) {
+    const label = route.name ?? route.match[0]!;
+    if (route.reviewers.length === 0) {
+      throw new ConfigError(`${path}: route "${label}" lists no reviewers`);
+    }
+    for (const n of route.reviewers) {
+      if (!names.has(n)) {
+        throw new ConfigError(`${path}: route "${label}" references unknown reviewer "${n}"`);
+      }
     }
   }
   if (cfg.chunkBudget < 4_000) {

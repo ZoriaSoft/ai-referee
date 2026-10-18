@@ -51,14 +51,26 @@ Owner decides.
 - [x] `cliCommandBinary` hardening: compound commands (pipes, redirects) now
       skip the precheck instead of masking missing binaries
 
+
+## Done — round 3
+
+- [x] **Review quality presets**: `strict`/`light` prompt profiles
+      (`profile` config, `--strict`/`--light` on review + daemon).
+- [x] **Per-path reviewer routing**: `routes` config — glob-matched files get
+      their own named reviewer subset, optional route `profile` and
+      `instructions`; routed chunks never mix with unrouted and fail closed
+      when their own referees are down. Route/profile recorded per chunk in
+      reports; doctor lists route mappings.
+
 ## Next (priority order)
 
-- [ ] **Review quality presets**: `--strict`/`--light` prompt profiles;
-      per-path reviewer routing (e.g. security reviewer for auth files).
-- [ ] **Fix round for PR targets**: push fixes to the PR branch when the user
-      has push rights (`--fix --push`).
+- [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
+      to a route-matched fixer instead.
 - [ ] **Daemon polish**: exponential backoff on `gh` failures, systemd unit
       example in docs.
+- [ ] **Severity-based gate**: today any model REJECT fails; optionally let
+      `light`-mode runs treat non-blocker REJECTs as warnings (needs verdict
+      severity mapping, not just prompt wording).
 - [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
 - [ ] **Review dismissal on new pushes**: daemon re-reviews after new commits,
       but the old REQUEST_CHANGES stays — dismiss superseded reviews via `gh api`.

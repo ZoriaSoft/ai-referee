@@ -101,4 +101,26 @@ describe("runDoctor", () => {
     expect(gh?.status).toBe("warn");
     expect(gh?.detail).toContain("not authenticated");
   });
+
+  it("reports each configured route with its reviewer mapping", async () => {
+    await writeFile(
+      join(dir, ".ai-referee.json"),
+      JSON.stringify({
+        testCommand: "true",
+        reviewers: [
+          { name: "sh", type: "cli", command: "cat" },
+          { name: "sec", type: "cli", command: "cat" },
+        ],
+        routes: [
+          { name: "security", match: ["src/auth/**"], reviewers: ["sec"], profile: "light" },
+        ],
+      }),
+    );
+    const lines: string[] = [];
+    const res = await runDoctor({ cwd: dir, out: (l) => lines.push(l) });
+    const route = res.checks.find((c) => c.name === 'route "security"')!;
+    expect(route.status).toBe("ok");
+    expect(route.detail).toContain("src/auth/** → sec");
+    expect(route.detail).toContain("(light)");
+  });
 });

@@ -38,6 +38,8 @@ function cfg(overrides: Partial<Config>): Config {
     autoMerge: false,
     prComments: false,
     reviewConcurrency: 1,
+    profile: "strict",
+    routes: [],
     contextBudget: 40_000,
     daemonIntervalSec: 120,
     workdir: null,
@@ -351,6 +353,90 @@ describe("runReview pipeline", () => {
     } finally {
       process.env.PATH = savedPath;
     }
+  });
+
+  it("routes matched files to their own reviewer chain and prompt", async () => {
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/token.ts"), "export const t = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "default", type: "cli", command: `echo def >> ${dir}/calls && ${echo(APPROVE)}` },
+          { name: "sec", type: "cli", command: `cat > ${dir}/sec.prompt && echo sec >> ${dir}/calls && ${echo(APPROVE)}` },
+        ],
+        routes: [{ name: "security", match: ["src/auth/**"], reviewers: ["sec"], instructions: "watch auth bypass" }],
+      }),
+      base: "main",
+    });
+
+    expect(report.verdict).toBe("APPROVE");
+    expect(report.chunks).toHaveLength(2);
+    const secChunk = report.chunks.find((c) => c.route === "security")!;
+    expect(secChunk.files).toEqual(["src/auth/token.ts"]);
+    expect(secChunk.attempts.map((a) => a.reviewer)).toEqual(["sec"]);
+    const plain = report.chunks.find((c) => c.route === null)!;
+    expect(plain.files).toEqual(["a.ts"]);
+    expect(plain.attempts.map((a) => a.reviewer)).toEqual(["default"]);
+
+    const calls = (await readFile(join(dir, "calls"), "utf8")).trim().split("\n");
+    expect(calls).toEqual(["def", "sec"]);
+    const prompt = await readFile(join(dir, "sec.prompt"), "utf8");
+    expect(prompt).toContain("Additional instructions for this path:");
+    expect(prompt).toContain("watch auth bypass");
+    expect(prompt).toContain("src/auth/token.ts");
+    expect(prompt).not.toContain("a.ts");
+  });
+
+  it("fails closed when routed referees are down — no silent fallback to the default chain", async () => {
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/token.ts"), "export const t = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "default", type: "cli", command: echo(APPROVE) },
+          { name: "sec", type: "cli", command: "exit 1" },
+        ],
+        routes: [{ name: "security", match: ["src/auth/**"], reviewers: ["sec"] }],
+      }),
+      base: "main",
+    });
+
+    expect(report.verdict).toBe("REJECT");
+    expect(report.reasons.join(" ")).toContain('no referee answered for route "security"');
+    const secChunk = report.chunks.find((c) => c.route === "security")!;
+    expect(secChunk.attempts.map((a) => a.reviewer)).toEqual(["sec"]);
+  });
+
+  it("switches the prompt profile via the run option and per-route override", async () => {
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/token.ts"), "export const t = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+
+    const report = await runReview({
+      cwd: dir,
+      profile: "light",
+      config: cfg({
+        reviewers: [
+          { name: "rec", type: "cli", command: `cat > ${dir}/plain.prompt && ${echo(APPROVE)}` },
+          { name: "sec", type: "cli", command: `cat > ${dir}/sec2.prompt && ${echo(APPROVE)}` },
+        ],
+        routes: [{ match: ["src/auth/**"], reviewers: ["sec"], profile: "strict" }],
+      }),
+      base: "main",
+    });
+
+    const plainPrompt = await readFile(join(dir, "plain.prompt"), "utf8");
+    expect(plainPrompt).toContain("Review mode: light");
+    const secPrompt = await readFile(join(dir, "sec2.prompt"), "utf8");
+    expect(secPrompt).toContain("Review mode: strict");
+    expect(report.chunks.find((c) => c.route === "src/auth/**")!.profile).toBe("strict");
+    expect(report.chunks.find((c) => c.route === null)!.profile).toBe("light");
   });
 
 });

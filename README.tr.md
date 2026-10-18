@@ -51,6 +51,13 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
 - `daemon`: `gh pr list`'i yoklar, her yeni PR head'ini bir kez inceler,
   raporları `.ai-referee/reports/` altına yazar; `--comment` ile PR'a yazar.
 - `hook install`: REJECT'te push'u durduran pre-push kancası kurar.
+- `--strict`/`--light`: inceleme profili — `strict` tam denetim yapar,
+  `light` yalnız merge'i bozan hatalara takılır (çökme, veri kaybı, güvenlik
+  açığı); config'te `"profile"` ile de ayarlanır.
+- `routes`: glob eşleşen dosyaları belirli reviewer'lara yollar — örn.
+  `src/auth/**` güçlü bir güvenlik modeline, geri kalanı ucuz varsayılana.
+  Yönlendirilen dosyalar ayrı parçalarda incelenir; kendi hakemleri cevap
+  vermezse varsayılan zincire sessizce düşmezler → REJECT (fail-closed).
 
 ## Mevcut araçlardan farkı
 

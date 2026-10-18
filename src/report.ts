@@ -54,17 +54,20 @@ export function toMarkdown(report: GateReport): string {
     }
   }
 
+  const routed = report.chunks.some((c) => c.route !== null || c.profile !== "strict");
   const attempts = report.chunks.flatMap((c) =>
-    c.attempts.map((a) => ({ chunk: c.index + 1, ...a })),
+    c.attempts.map((a) => ({ chunk: c.index + 1, route: c.route, profile: c.profile, ...a })),
   );
   if (attempts.length) {
     lines.push("", "## Referee log", "");
-    lines.push("| chunk | referee | result | ms | detail |");
-    lines.push("|---|---|---|---|---|");
+    lines.push(routed ? "| chunk | route | referee | result | ms | detail |" : "| chunk | referee | result | ms | detail |");
+    lines.push(routed ? "|---|---|---|---|---|---|" : "|---|---|---|---|---|");
     for (const a of attempts) {
-      lines.push(
-        `| ${a.chunk} | ${a.reviewer} | ${a.ok ? "answered" : "failed"} | ${a.durationMs} | ${a.detail.replaceAll("|", "\\|")} |`,
-      );
+      const routeCell = [a.route ?? "", a.profile !== "strict" ? `(${a.profile})` : ""].filter(Boolean).join(" ");
+      const cells = routed
+        ? [a.chunk, routeCell || "—", a.reviewer, a.ok ? "answered" : "failed", a.durationMs, a.detail]
+        : [a.chunk, a.reviewer, a.ok ? "answered" : "failed", a.durationMs, a.detail];
+      lines.push(`| ${cells.map((c) => String(c).replaceAll("|", "\\|")).join(" | ")} |`);
     }
   }
 

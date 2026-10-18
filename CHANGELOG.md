@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+
+## [Unreleased] — round 3 (2026-10-18)
+
+### Added
+
+- Review profiles: `strict` (default) reviews fully; `light` only rejects on
+  merge-stoppers (crashes, data loss, security holes) — smaller findings stay
+  at minor/info. Set via `profile` config, `--strict`/`--light` on `review`
+  and `daemon`.
+- Per-path reviewer routing (`routes` config): files matching route globs are
+  chunked separately and reviewed only by that route's named reviewers, with
+  optional per-route `profile` and `instructions` injected into the prompt.
+  Multiple matching routes merge (reviewer union, first route's profile, all
+  instructions). Routed chunks fail closed — they never fall back to the
+  default chain, so sensitive code can't be approved by the wrong referee.
+- `doctor` now lists each route's glob → reviewer mapping.
+- Markdown referee log gains a route/profile column when any chunk is routed
+  or non-strict; `ChunkResult` records `route` and `profile` in JSON reports.
+- Config validation: duplicate reviewer names, routes with empty `match`/`reviewers`,
+  and routes referencing unknown reviewer names are rejected at load.
+  (Reviewer names must be unique — routes resolve them by name.)
+
 ## [Unreleased] — round 2 (2026-10-18)
 
 ### Added

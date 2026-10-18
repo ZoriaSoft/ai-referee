@@ -12,6 +12,7 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 | `src/reviewer.ts` | reviewer adapters (`cli`, `api`), sequential fallback chain, `cliCommandBinary`, token usage capture |
 | `src/comments.ts` | finding→inline-comment anchoring (rightLines) + GitHub PR review payload builder |
 | `src/doctor.ts` | `doctor` sanity checks: repo, config, reviewer binaries/keys, gh auth |
+|`src/routing.ts`|per-file route resolution (`planForFile`) and plan-aware chunking — routed/unrouted files never share a chunk|
 | `src/verdict.ts` | strict verdict extraction/validation from messy model output |
 | `src/diff.ts` | unified-diff splitting, glob matching, budget chunking, right-side line map |
 | `src/config.ts` | `.ai-referee.json` loading (lenient JSON: comments + trailing commas) |
@@ -27,6 +28,8 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 
 - **Fail closed.** Any missing/invalid verdict, dead reviewer chain, or test failure
   yields REJECT. Nothing may approve without a live reviewer verdict.
+- **Routes fail closed too.** A routed chunk uses only its route's reviewers;
+  never fall back to the default chain or the gate approves unreviewed code.
 - **One fix round max.** Never loop fix→review.
 - Reviewer output is untrusted: always via `parseVerdict`, never `JSON.parse` directly.
 - CLI reviewer commands run via `bash -c` with `{prompt}`/`{prompt_file}`/stdin

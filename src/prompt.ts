@@ -12,6 +12,25 @@ const VERDICT_SCHEMA = `{
   ]
 }`;
 
+import type { ReviewProfile } from "./types.js";
+
+const PROFILE_RULES: Record<ReviewProfile, string[]> = {
+  strict: [
+    "- Judge correctness, security, data loss, and regression risk. Ignore style nits.",
+    "- APPROVE only if you would let this merge without changes.",
+    "- REJECT when you find a blocker/major issue you can point to; never reject on a hunch.",
+  ],
+  light: [
+    "- Judge only merge-blocking problems: crashes, data loss, security holes, broken contracts.",
+    "- Report anything smaller at minor/info severity, but it must not drive the verdict.",
+    "- APPROVE unless a blocking issue exists. REJECT only for blocker severity you can point to.",
+  ],
+};
+const PROFILE_TAIL = [
+  "- Findings must cite file and (when possible) the new-file line number in the diff.",
+  "- Do not request changes outside this diff. Do not praise. Be terse.",
+];
+
 /** Prompt sent to a reviewer for one diff chunk. */
 export function buildReviewPrompt(opts: {
   index: number;
@@ -26,10 +45,18 @@ export function buildReviewPrompt(opts: {
   contextFiles?: { path: string; content: string }[];
   /** Files whose bodies were skipped because the context budget ran out. */
   contextSkipped?: string[];
+  /** Prompt profile: "strict" reviews fully; "light" blocks only on merge-stoppers. */
+  profile?: ReviewProfile;
+  /** Route-provided extra instructions, injected before the rules. */
+  instructions?: string[];
 }): string {
-  const { index, files, patch, truncated, totalChunks, base, head, repoNote } = opts;
+  const { index, files, patch, truncated, totalChunks, base, head, repoNote, profile } = {
+    profile: "strict" as ReviewProfile,
+    ...opts,
+  };
   const parts: string[] = [
-    "You are a strict code-review referee deciding whether a change may merge.",
+    "You are a code-review referee deciding whether a change may merge.",
+    `Review mode: ${profile === "light" ? "light — only merge-blocking problems count" : "strict — full review"}.`,
     "",
     `Diff under review: ${base}...${head}` +
       (totalChunks > 1 ? ` — chunk ${index + 1}/${totalChunks}` : ""),
@@ -43,14 +70,15 @@ export function buildReviewPrompt(opts: {
       "Review what is shown; do not invent findings about omitted lines.",
     );
   }
+  const extra = (opts.instructions ?? []).filter((s) => s.trim().length > 0);
+  if (extra.length) {
+    parts.push("", "Additional instructions for this path:", ...extra.map((s) => `- ${s}`));
+  }
   parts.push(
     "",
     "Rules:",
-    "- Judge correctness, security, data loss, and regression risk. Ignore style nits.",
-    "- APPROVE only if you would let this merge without changes.",
-    "- REJECT when you find a blocker/major issue you can point to; never reject on a hunch.",
-    "- Findings must cite file and (when possible) the new-file line number in the diff.",
-    "- Do not request changes outside this diff. Do not praise. Be terse.",
+    ...PROFILE_RULES[profile],
+    ...PROFILE_TAIL,
     "",
     "Respond with ONLY a JSON object (no markdown fence, no prose):",
     VERDICT_SCHEMA,

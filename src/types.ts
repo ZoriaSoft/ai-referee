@@ -1,5 +1,8 @@
 export type Severity = "blocker" | "major" | "minor" | "info";
 export type Verdict = "APPROVE" | "REJECT";
+/** Review prompt profile — how willing the reviewer is to approve. */
+export type ReviewProfile = "strict" | "light";
+
 
 export interface Finding {
   file: string;
@@ -51,6 +54,10 @@ export interface ChunkResult {
   attempts: ReviewerAttempt[];
   /** 1 = initial review, 2 = re-review after the fix round. */
   round: number;
+  /** Prompt profile used for this chunk. */
+  profile: ReviewProfile;
+  /** Labels of matching routes joined with "+" (e.g. "auth-security"); null when no route matched. */
+  route: string | null;
 }
 
 export interface GateReport {

@@ -4,24 +4,25 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../src/config.js";
 
-let dir: string | null = null;
+let dirs: string[] = [];
 
 afterEach(async () => {
-  if (dir) await rm(dir, { recursive: true, force: true });
-  dir = null;
+  for (const d of dirs) await rm(d, { recursive: true, force: true });
+  dirs = [];
 });
 
 async function writeCfg(content: string): Promise<string> {
-  dir = await mkdtemp(join(tmpdir(), "air-cfg-"));
-  const path = join(dir, ".ai-referee.json");
+  const d = await mkdtemp(join(tmpdir(), "air-cfg-"));
+  dirs.push(d);
+  const path = join(d, ".ai-referee.json");
   await writeFile(path, content);
-  return dir;
+  return d;
 }
 
 describe("loadConfig", () => {
   it("returns defaults when no file exists", async () => {
-    dir = await mkdtemp(join(tmpdir(), "air-cfg-"));
-    const { config, path } = await loadConfig(dir);
+    dirs.push(await mkdtemp(join(tmpdir(), "air-cfg-")));
+    const { config, path } = await loadConfig(dirs[dirs.length - 1]!);
     expect(path).toBeNull();
     expect(config.reviewers).toEqual([]);
     expect(config.chunkBudget).toBe(100_000);
@@ -67,5 +68,61 @@ describe("loadConfig", () => {
     const cwd = await writeCfg(`{"testCommand":"yes"}`);
     const { config } = await loadConfig(cwd, join(cwd, ".ai-referee.json"));
     expect(config.testCommand).toBe("yes");
+  });
+
+  it("parses profile and routes", async () => {
+    const cwd = await writeCfg(`{
+      "profile": "light",
+      "reviewers": [{"name":"sec","type":"cli","command":"cat"}],
+      "routes": [{
+        "name": "security",
+        "match": ["src/auth/**"],
+        "reviewers": ["sec"],
+        "profile": "strict",
+        "instructions": "watch auth bypass"
+      }]
+    }`);
+    const { config } = await loadConfig(cwd);
+    expect(config.profile).toBe("light");
+    expect(config.routes).toHaveLength(1);
+    expect(config.routes[0]!.reviewers).toEqual(["sec"]);
+    expect(config.routes[0]!.profile).toBe("strict");
+  });
+
+  it("rejects a bad profile value", async () => {
+    const cwd = await writeCfg(`{"profile": "paranoid"}`);
+    await expect(loadConfig(cwd)).rejects.toThrow(/"profile" must be "strict" or "light"/);
+  });
+
+  it("rejects a route referencing an unknown reviewer", async () => {
+    const cwd = await writeCfg(`{
+      "reviewers": [{"name":"a","type":"cli","command":"cat"}],
+      "routes": [{"match": ["x/**"], "reviewers": ["ghost"]}]
+    }`);
+    await expect(loadConfig(cwd)).rejects.toThrow(/unknown reviewer "ghost"/);
+  });
+
+  it("rejects a route with no reviewers and a route with empty match", async () => {
+    const cwd = await writeCfg(`{
+      "reviewers": [{"name":"a","type":"cli","command":"cat"}],
+      "routes": [{"match": [], "reviewers": ["a"]}]
+    }`);
+    await expect(loadConfig(cwd)).rejects.toThrow(/match must be a non-empty/);
+
+    const cwd2 = await writeCfg(`{
+      "reviewers": [{"name":"a","type":"cli","command":"cat"}],
+      "routes": [{"match": ["x/**"], "reviewers": []}]
+    }`);
+    await expect(loadConfig(cwd2)).rejects.toThrow(/lists no reviewers/);
+  });
+
+  it("rejects duplicate reviewer names — routing resolves by name", async () => {
+    const cwd = await writeCfg(`{
+      "reviewers": [
+        {"name":"a","type":"cli","command":"cat"},
+        {"name":"a","type":"cli","command":"cat"}
+      ]
+    }`);
+    await expect(loadConfig(cwd)).rejects.toThrow(/duplicate reviewer name "a"/);
   });
 });

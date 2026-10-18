@@ -81,6 +81,17 @@ export async function runDoctor(opts: {
     push(check);
   }
 
+  for (const route of config.routes) {
+    // Route reviewer names are validated at config load; this surfaces the mapping.
+    const label = route.name ?? route.match[0]!;
+    push({
+      name: `route "${label}"`,
+      status: "ok",
+      detail: `${route.match.join(", ")} → ${route.reviewers.join(", ")}` +
+        (route.profile ? ` (${route.profile})` : ""),
+    });
+  }
+
   if (config.fixerCommand) {
     const bin = cliCommandBinary(config.fixerCommand);
     const found = bin === null ? null : await which(bin, cwd);

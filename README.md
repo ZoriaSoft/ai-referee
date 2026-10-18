@@ -83,6 +83,8 @@ npx ai-referee daemon --interval 120       # add --once for a single pass
    Oversized single files are truncated at a line boundary with a marker.
    Full file bodies are appended under `contextBudget` (default 40k) so the
    reviewer sees surrounding code, not just hunks.
+   Files matched by a `route` are chunked separately and reviewed only by
+   that route's reviewers, profile and instructions (see below).
 4. **Review.** Chunks run `reviewConcurrency` at a time (default 2) against
    the reviewer chain in order — the first reviewer that produces output
    wins. Garbage output gets one retry nudge; unparseable output → that
@@ -94,6 +96,37 @@ npx ai-referee daemon --interval 120       # add --once for a single pass
    (local targets only). `--merge` runs `gh pr merge` on APPROVE (PR only).
    `--comment` posts a GitHub PR review: APPROVE or REQUEST_CHANGES with
    findings anchored to diff lines as inline comments.
+
+## Review profiles and path routing
+
+Two prompt profiles: **strict** (default) reviews fully; **light** only
+rejects on merge-stoppers (crashes, data loss, security holes) and treats
+everything else as minor/info findings. Per run:
+
+```bash
+npx ai-referee review --light       # or --strict; or "profile" in config
+```
+
+`routes` send matching files to a named subset of the chain — e.g. a strong
+security model for auth code while everything else uses the cheap default.
+Routed and unrouted files never share a chunk, and a routed chunk **fails
+closed** if its own referees are down — it never falls back to the default
+chain.
+
+```jsonc
+"routes": [
+  {
+    "name": "security",                  // label in reports
+    "match": ["src/auth/**", "**/*.pem"], // globs, same syntax as exclude
+    "reviewers": ["claude-opus"],        // names from the reviewers list
+    "profile": "strict",                 // optional per-route override
+    "instructions": "check auth bypass and secret handling"
+  }
+]
+```
+
+A file matching several routes gets the union of their reviewers (route
+order), the first route's profile, and all their instructions.
 
 ## Reviewer config
 
@@ -140,13 +173,17 @@ When an `api` reviewer reports `usage`, token counts are summed into
 | `prComments` | `false` | Post verdict + anchored findings as a GitHub PR review |
 | `daemonIntervalSec` | 120 | Daemon poll interval |
 | `workdir` | `null` | Subdirectory for test/fix commands (monorepos) |
+| `profile` | `"strict"` | Default prompt profile; `--light`/`--strict` override per run |
+| `routes` | `[]` | Per-path reviewer routing (see above) |
 
 ## Commands
 
 ```
 ai-referee review [--pr N] [--base REF] [--uncommitted] [--fix] [--merge]
-                  [--comment] [--skip-tests] [--format md|json|both] [--out FILE]
+                  [--comment] [--skip-tests] [--strict | --light]
+                  [--format md|json|both] [--out FILE]
 ai-referee daemon [--interval SEC] [--once] [--merge] [--comment] [--fix]
+                  [--strict | --light]
 ai-referee hook install
 ai-referee doctor
 ai-referee init

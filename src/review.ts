@@ -2,13 +2,14 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "./config.js";
-import { chunkDiff, globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
+import { globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
 import { run } from "./exec.js";
 import * as git from "./git.js";
 import { buildPrReview } from "./comments.js";
 import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
-import type { ChunkResult, Finding, GateReport, TestResult, TokenUsage } from "./types.js";
+import { chunkFilesByRoute, type ReviewPlan } from "./routing.js";
+import type { ChunkResult, Finding, GateReport, ReviewProfile, TestResult, TokenUsage } from "./types.js";
 import { parseVerdict, VerdictParseError } from "./verdict.js";
 
 export interface ReviewTarget {
@@ -41,6 +42,8 @@ export interface ReviewOptions {
   postComments?: boolean;
   /** Max parse retries per chunk after the first attempt. */
   maxParseRetries?: number;
+  /** Prompt profile override; defaults to config.profile ("strict"). */
+  profile?: ReviewProfile;
 }
 
 export class ReviewError extends Error {}
@@ -119,26 +122,30 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     allFiles.filter((f) => config.exclude.some((p) => globMatch(p, f.path))).map((f) => f.path),
   );
   const files = allFiles.filter((f) => !excluded.has(f.path) && !f.isBinary);
-  const chunks = chunkDiff(files, config.chunkBudget);
-
   const tests = await runTests(config, wt, opts.skipTests === true);
-  const reviewers = config.reviewers.map(buildReviewer);
+  const runProfile: ReviewProfile = opts.profile ?? config.profile;
+  const byName = new Map(config.reviewers.map((r) => [r.name, buildReviewer(r)]));
+  const defaultChain = config.reviewers.map((r) => byName.get(r.name)!);
   const repoNote = await repoNoteSnippet(await readOptional(join(wt, "README.md")));
 
   const reviewed = await reviewChunks({
-    chunks,
-    reviewers,
+    files,
+    byName,
+    defaultChain,
+    runProfile,
     target,
     repoNote,
     worktree: wt,
     maxParseRetries: opts.maxParseRetries ?? 1,
     concurrency: config.reviewConcurrency,
     contextBudget: config.contextBudget,
+    chunkBudget: config.chunkBudget,
+    routes: config.routes,
     round: 1,
   });
 
   let findings = aggregateFindings(reviewed);
-  let { verdict, reasons } = decideVerdict(reviewed, tests, reviewers.length === 0);
+  let { verdict, reasons } = decideVerdict(reviewed, tests, config.reviewers.length === 0);
 
   const fix = { requested: opts.fix === true, ran: false, detail: null as string | null };
   if (
@@ -154,16 +161,19 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     // Re-review the modified worktree once.
     const newDiff = await git.diffAgainst(wt, target.base, true);
     const newFiles = parseDiff(newDiff).filter((f) => !excluded.has(f.path) && !f.isBinary);
-    const newChunks = chunkDiff(newFiles, config.chunkBudget);
     const reReviewed = await reviewChunks({
-      chunks: newChunks,
-      reviewers,
+      files: newFiles,
+      byName,
+      defaultChain,
+      runProfile,
       target,
       repoNote,
       worktree: wt,
       maxParseRetries: opts.maxParseRetries ?? 1,
       concurrency: config.reviewConcurrency,
       contextBudget: config.contextBudget,
+      chunkBudget: config.chunkBudget,
+      routes: config.routes,
       round: 2,
     });
     const reTests = await runTests(config, wt, false);
@@ -265,20 +275,37 @@ async function runTests(config: Config, worktree: string, skip: boolean): Promis
 }
 
 async function reviewChunks(opts: {
-  chunks: DiffChunk[];
-  reviewers: Reviewer[];
+  files: FileDiff[];
+  byName: Map<string, Reviewer>;
+  defaultChain: Reviewer[];
+  runProfile: ReviewProfile;
   target: ReviewTarget;
   repoNote: string | null;
   worktree: string;
   maxParseRetries: number;
   concurrency: number;
   contextBudget: number;
+  chunkBudget: number;
+  routes: Config["routes"];
   round: number;
 }): Promise<ChunkResult[]> {
-  const { chunks, reviewers, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, round } = opts;
+  const { files, byName, defaultChain, runProfile, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, round } = opts;
 
-  /** Reviews one chunk through the fallback chain with parse retries. */
-  const reviewOne = async (chunk: DiffChunk): Promise<ChunkResult> => {
+  // Plan per file (route match → reviewer subset, profile, instructions),
+  // then chunk so routed and unrouted files never share a prompt.
+  const planned = chunkFilesByRoute(
+    files,
+    { routes: opts.routes, chunkBudget: opts.chunkBudget },
+    runProfile,
+  ).chunks;
+
+  /** Reviews one chunk through its routed fallback chain with parse retries. */
+  const reviewOne = async (entry: { chunk: DiffChunk; plan: ReviewPlan }): Promise<ChunkResult> => {
+    const { chunk, plan } = entry;
+    const chain =
+      plan.reviewerNames.length === 0
+        ? defaultChain
+        : plan.reviewerNames.map((n) => byName.get(n)!).filter(Boolean);
     const result: ChunkResult = {
       index: chunk.index,
       files: chunk.files.map((f) => f.path),
@@ -286,9 +313,11 @@ async function reviewChunks(opts: {
       failedReason: null,
       attempts: [],
       round,
+      profile: plan.profile,
+      route: plan.route,
     };
 
-    if (reviewers.length === 0) {
+    if (chain.length === 0) {
       result.failedReason = "no reviewers configured";
       return result;
     }
@@ -299,23 +328,26 @@ async function reviewChunks(opts: {
       files: result.files,
       patch: chunk.patch,
       truncated: chunk.truncated,
-      totalChunks: chunks.length,
+      totalChunks: planned.length,
       base: target.base,
       head: target.head,
       repoNote,
+      profile: plan.profile,
+      instructions: plan.instructions,
       contextFiles,
       contextSkipped,
     });
 
     for (let attempt = 0; attempt <= maxParseRetries; attempt++) {
-      const chain = await invokeChain(reviewers, prompt, worktree);
-      result.attempts.push(...chain.attempts);
-      if (!chain.response) {
-        result.failedReason = "no referee answered (all reviewers unavailable)";
+      const tried = await invokeChain(chain, prompt, worktree);
+      result.attempts.push(...tried.attempts);
+      if (!tried.response) {
+        const where = plan.route ? ` for route "${plan.route}"` : "";
+        result.failedReason = `no referee answered${where} (all reviewers unavailable)`;
         break;
       }
       try {
-        result.parsed = parseVerdict(chain.response.output);
+        result.parsed = parseVerdict(tried.response.output);
         result.failedReason = null;
         break;
       } catch (err) {
@@ -332,15 +364,15 @@ async function reviewChunks(opts: {
 
   // Bounded worker pool: chunks run `concurrency` at a time; results keep
   // diff order regardless of completion order.
-  const results = new Array<ChunkResult>(chunks.length);
+  const results = new Array<ChunkResult>(planned.length);
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < chunks.length) {
+    while (next < planned.length) {
       const i = next++;
-      results[i] = await reviewOne(chunks[i]!);
+      results[i] = await reviewOne(planned[i]!);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), chunks.length || 1) }, worker));
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), planned.length || 1) }, worker));
   return results;
 }
 

@@ -30,6 +30,8 @@ REVIEW OPTIONS
   --merge             gh pr merge when the verdict is APPROVE (PR only)
   --comment           post the verdict + findings as a GitHub PR review (PR only)
   --skip-tests        skip the configured test command
+  --strict            strict profile: full review (default)
+  --light             light profile: only merge-blocking problems may reject
   --format <fmt>      markdown | json | both   (default: markdown on a TTY, json when piped)
   --out <path>        write the report to a file instead of stdout
   --config <path>     alternative config file
@@ -39,6 +41,7 @@ DAEMON OPTIONS
   --once              single poll, then exit
   --merge             auto-merge PRs that pass the gate
   --comment           post each verdict as a GitHub PR review
+  --strict/--light    prompt profile override for every polled PR
   --fix               run one fixer round on REJECT (no-op for PR worktrees)
 
 EXIT CODES
@@ -76,6 +79,19 @@ const STARTER_CONFIG = `{
   // Chunks reviewed concurrently (1-8). Full changed-file bodies are
   // appended to prompts up to contextBudget chars (0 disables).
   // "reviewConcurrency": 2, "contextBudget": 40000,
+
+  // Prompt profile: "strict" (default) reviews fully; "light" only rejects
+  // on merge-stoppers. Routes send matching files to named reviewers only —
+  // they never fall back to the default chain.
+  // "profile": "strict",
+  // "routes": [
+  //   {
+  //     "name": "security",
+  //     "match": ["src/auth/**"],
+  //     "reviewers": ["claude"],
+  //     "instructions": "check auth bypass and secret handling"
+  //   }
+  // ],
 
   "chunkBudget": 100000,
   "exclude": ["*.lock", "package-lock.json", "dist/**", "*.min.js"]
@@ -140,8 +156,19 @@ function parseCommon(rest: string[]) {
       interval: { type: "string" },
       once: { type: "boolean", default: false },
       comment: { type: "boolean", default: false },
+      strict: { type: "boolean", default: false },
+      light: { type: "boolean", default: false },
     },
   });
+}
+
+/** Maps --strict/--light to a profile; null means "use config". Errors on both. */
+function profileFromFlags(v: { strict?: boolean; light?: boolean }): "strict" | "light" | null {
+  if (v.strict && v.light) {
+    process.stderr.write(`--strict and --light are mutually exclusive\n`);
+    process.exit(2);
+  }
+  return v.light ? "light" : v.strict ? "strict" : null;
 }
 
 async function loadOrDie(cwd: string, path?: string): Promise<Config> {
@@ -176,6 +203,7 @@ async function cmdReview(rest: string[]): Promise<number> {
       fix: v.fix,
       autoMerge: v.merge,
       postComments: (v.comment || config.prComments) && pr !== undefined,
+      profile: profileFromFlags(v) ?? undefined,
     });
   } catch (err) {
     if (err instanceof ReviewError) {
@@ -212,6 +240,7 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     autoMerge: v.merge,
     postComments: v.comment || config.prComments,
     fix: v.fix,
+    profile: profileFromFlags(v) ?? undefined,
   });
 }
 
