@@ -38,14 +38,23 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
   const statePath = opts.statePath ?? join(cwd, ".ai-referee", "daemon-state.json");
   const state = await loadState(statePath);
 
+  const baseMs = Math.max(10, opts.intervalSec) * 1000;
+  let consecutiveFailures = 0;
+
   const poll = async (): Promise<void> => {
     let prs;
     try {
       prs = await git.ghListOpenPrs(cwd);
     } catch (err) {
-      log(`gh pr list failed: ${(err as Error).message}`);
+      consecutiveFailures++;
+      log(
+        `gh pr list failed: ${(err as Error).message} ` +
+          `(failure ${consecutiveFailures}, next poll in ${Math.round(pollDelayMs(baseMs, consecutiveFailures) / 1000)}s)`,
+      );
       return;
     }
+    if (consecutiveFailures > 0) log(`gh recovered after ${consecutiveFailures} failed poll(s)`);
+    consecutiveFailures = 0;
     log(`${prs.length} open PR(s)`);
 
     for (const pr of prs) {
@@ -85,15 +94,34 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
   await poll();
   if (opts.once) return 0;
 
-  const interval = setInterval(poll, Math.max(10, opts.intervalSec) * 1000);
+  // Chained timeouts, not setInterval: a slow review pass can never overlap
+  // the next poll, and gh failures push the next attempt back exponentially.
+  const tick = async (): Promise<void> => {
+    try {
+      await poll();
+    } catch (err) {
+      log(`poll cycle failed: ${(err as Error).message}`);
+    } finally {
+      timer = setTimeout(tick, pollDelayMs(baseMs, consecutiveFailures));
+    }
+  };
+  let timer = setTimeout(tick, pollDelayMs(baseMs, consecutiveFailures));
   const stop = (): void => {
-    clearInterval(interval);
+    clearTimeout(timer);
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   await Promise.withResolvers<never>().promise; // resolves only when a signal exits the process
   return 0;
+}
+
+/**
+ * Next poll delay. The first failure retries at the base interval (the failed
+ * poll already cost time); further failures double the wait, capped at 8×.
+ */
+export function pollDelayMs(baseMs: number, failures: number): number {
+  return baseMs * Math.min(2 ** Math.max(0, failures - 1), 8);
 }
 
 async function loadState(path: string): Promise<DaemonState> {

@@ -44,6 +44,10 @@ export function toMarkdown(report: GateReport): string {
     lines.push("", "## Gate reasons", "");
     for (const r of report.reasons) lines.push(`- ${r}`);
   }
+  if (report.warnings.length) {
+    lines.push("", "## Warnings", "");
+    for (const w of report.warnings) lines.push(`- ${w}`);
+  }
 
   if (report.findings.length) {
     lines.push("", "## Findings", "");

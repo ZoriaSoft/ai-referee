@@ -19,6 +19,10 @@ export interface PrReviewPayload {
 /** GitHub rejects reviews with too many inline comments; rest go to the body. */
 const MAX_INLINE_COMMENTS = 50;
 
+/** HTML marker embedded in posted review bodies — identifies reviews ai-referee
+ *  owns, so stale CHANGES_REQUESTED reviews can be dismissed safely. */
+export const REVIEW_MARKER = "<!-- ai-referee:review -->";
+
 const SEVERITY_LABEL: Record<string, string> = {
   blocker: "BLOCKER",
   major: "MAJOR",
@@ -74,6 +78,7 @@ export function buildPrReview(
   const sha = report.target.head.replace(/\s+\(worktree\)$/, "").slice(0, 10);
   const body: string[] = [
     `**ai-referee: ${report.verdict === "APPROVE" ? "APPROVED" : "REJECTED"}** \`${sha}\``,
+    REVIEW_MARKER,
     "",
     report.summary,
   ];

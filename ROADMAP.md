@@ -62,22 +62,35 @@ Owner decides.
       when their own referees are down. Route/profile recorded per chunk in
       reports; doctor lists route mappings.
 
+
+## Done — round 4
+
+- [x] **Stale review dismissal**: every posted PR review carries an
+      `ai-referee` marker; after posting a new verdict, superseded
+      `CHANGES_REQUESTED` reviews on older commits are dismissed via
+      `gh api .../dismissals`. Human reviews and foreign markers untouched —
+      a fixed PR is no longer held back by ai-referee's own stale rejection.
+- [x] **Daemon polish**: polls schedule via chained timeouts (a slow review
+      pass can never overlap the next poll); consecutive `gh pr list` failures
+      back off exponentially (2ⁿ⁻¹×, capped at 8×) and log the next delay.
+      systemd user-unit example in README.
+- [x] **Severity-aware light gate**: a `light`-profile REJECT that cites no
+      `blocker` finding is downgraded to a `warnings[]` entry instead of
+      blocking — the prompt contract now holds at the gate, not just in the
+      prompt. Zero-finding REJECTs can't be reclassified: still fail closed.
+
 ## Next (priority order)
 
 - [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
-      to a route-matched fixer instead.
-- [ ] **Daemon polish**: exponential backoff on `gh` failures, systemd unit
-      example in docs.
-- [ ] **Severity-based gate**: today any model REJECT fails; optionally let
-      `light`-mode runs treat non-blocker REJECTs as warnings (needs verdict
-      severity mapping, not just prompt wording).
+      to a route-matched fixer instead. (Deferred round 4 — few real setups
+      need a second fixer; dismissal/backoff/light-gate were higher value.)
 - [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
-- [ ] **Review dismissal on new pushes**: daemon re-reviews after new commits,
-      but the old REQUEST_CHANGES stays — dismiss superseded reviews via `gh api`.
 - [ ] **Multi-line inline comments**: GitHub supports start_line+line ranges;
       models would need to report line ranges, not single lines.
 - [ ] **Comment threading on unchanged code**: findings on unchanged lines
       adjacent to the diff could anchor via `subject_type: "file"`.
+- [ ] **Daemon concurrency**: PRs review sequentially today; a bounded pool
+      could overlap independent PR reviews.
 
 ## Known limits
 

@@ -45,15 +45,21 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
 - Markdown (TTY) ve JSON (pipe) rapor; `--format`, `--out`.
 - `--fix`: REJECT'te `fixerCommand`'ı bir kez çalıştırıp yeniden inceler.
 - `--comment`: PR'a GitHub review'ı olarak yazar — diff satırlarına denk gelen
-  bulgular satır içi yorum olur, kalanlar review gövdesine girer.
+  bulgular satır içi yorum olur, kalanlar review gövdesine girer. Yeni bir head
+  incelendiğinde, eski commit'e ait ai-referee `CHANGES_REQUESTED` review'ları
+  otomatik dismiss edilir; insan review'larına dokunulmaz.
 - `doctor`: config, reviewer binary'leri, API anahtarları ve `gh` kimliğini
   tek komutta doğrular.
 - `daemon`: `gh pr list`'i yoklar, her yeni PR head'ini bir kez inceler,
   raporları `.ai-referee/reports/` altına yazar; `--comment` ile PR'a yazar.
+  `gh` hatalarında yoklama aralığı üssel olarak geriler (en fazla 8×) ve
+  yoklamalar asla çakışmaz; systemd unit örneği README.md'de.
 - `hook install`: REJECT'te push'u durduran pre-push kancası kurar.
 - `--strict`/`--light`: inceleme profili — `strict` tam denetim yapar,
   `light` yalnız merge'i bozan hatalara takılır (çökme, veri kaybı, güvenlik
-  açığı); config'te `"profile"` ile de ayarlanır.
+  açığı); config'te `"profile"` ile de ayarlanır. Kapı da aynı sözleşmeyi
+  uygular: `light` profilde blocker bulgusu göstermeyen bir REJECT engellemek
+  yerine raporda uyarıya dönüşür.
 - `routes`: glob eşleşen dosyaları belirli reviewer'lara yollar — örn.
   `src/auth/**` güçlü bir güvenlik modeline, geri kalanı ucuz varsayılana.
   Yönlendirilen dosyalar ayrı parçalarda incelenir; kendi hakemleri cevap

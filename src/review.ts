@@ -5,7 +5,7 @@ import type { Config } from "./config.js";
 import { globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
 import { run } from "./exec.js";
 import * as git from "./git.js";
-import { buildPrReview } from "./comments.js";
+import { buildPrReview, REVIEW_MARKER } from "./comments.js";
 import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
 import { chunkFilesByRoute, type ReviewPlan } from "./routing.js";
@@ -145,7 +145,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   });
 
   let findings = aggregateFindings(reviewed);
-  let { verdict, reasons } = decideVerdict(reviewed, tests, config.reviewers.length === 0);
+  let { verdict, reasons, warnings } = decideVerdict(reviewed, tests, config.reviewers.length === 0);
 
   const fix = { requested: opts.fix === true, ran: false, detail: null as string | null };
   if (
@@ -181,6 +181,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     const decided = decideVerdict(reReviewed, reTests, false);
     verdict = decided.verdict;
     reasons = decided.reasons;
+    warnings = decided.warnings;
     reviewed.length = 0;
     reviewed.push(...reReviewed);
     tests.passed = reTests.passed;
@@ -218,6 +219,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     findings,
     chunks: reviewed,
     reasons,
+    warnings,
     fix,
     comments: { requested: opts.postComments === true && target.pr !== undefined, posted: false, detail: null },
   };
@@ -227,7 +229,14 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       const payload = buildPrReview(report, allFiles);
       await git.ghPostReview(opts.cwd, target.pr, payload);
       report.comments.posted = true;
-      report.comments.detail = `posted ${payload.event} with ${payload.comments.length} inline comment(s)`;
+      let detail = `posted ${payload.event} with ${payload.comments.length} inline comment(s)`;
+      try {
+        const dismissed = await dismissStaleReviews(opts.cwd, target.pr, target.head);
+        if (dismissed > 0) detail += `; dismissed ${dismissed} superseded review(s)`;
+      } catch (err) {
+        detail += `; stale-review cleanup failed: ${(err as Error).message}`;
+      }
+      report.comments.detail = detail;
     } catch (err) {
       // Comment posting is best-effort: the gate verdict stands on its own.
       report.comments.detail = `post failed: ${(err as Error).message}`;
@@ -441,18 +450,28 @@ function decideVerdict(
   chunks: ChunkResult[],
   tests: TestResult,
   noReviewersConfigured: boolean,
-): { verdict: "APPROVE" | "REJECT"; reasons: string[] } {
+): { verdict: "APPROVE" | "REJECT"; reasons: string[]; warnings: string[] } {
   const reasons: string[] = [];
+  const warnings: string[] = [];
   if (tests.ran && !tests.passed) reasons.push("tests failed");
   if (noReviewersConfigured) reasons.push("no referees configured — refusing to approve");
   for (const c of chunks) {
     if (c.failedReason) {
       reasons.push(`chunk ${c.index + 1}: ${c.failedReason}`);
     } else if (c.parsed?.verdict === "REJECT") {
-      reasons.push(`chunk ${c.index + 1}: reviewer rejected`);
+      // Light profile: the reviewer should only reject on blockers. A REJECT
+      // that lists no blocker finding is reviewer noise — warn, don't gate.
+      // Zero findings can't be reclassified, so it still fails closed.
+      if (c.profile === "light" && c.parsed.findings.length > 0 && !c.parsed.findings.some((f) => f.severity === "blocker")) {
+        warnings.push(
+          `chunk ${c.index + 1}: light review rejected without blocker findings — treated as warning`,
+        );
+      } else {
+        reasons.push(`chunk ${c.index + 1}: reviewer rejected`);
+      }
     }
   }
-  return { verdict: reasons.length ? "REJECT" : "APPROVE", reasons };
+  return { verdict: reasons.length ? "REJECT" : "APPROVE", reasons, warnings };
 }
 
 function summarize(chunks: ChunkResult[], verdict: "APPROVE" | "REJECT"): string {
@@ -480,4 +499,23 @@ async function runFixer(
   if (res.timedOut) return "fixer timed out";
   if (res.exitCode !== 0) return `fixer exited ${res.exitCode}: ${res.stderr.trim().slice(0, 200)}`;
   return res.stdout.trim().slice(0, 400) || "fixer completed";
+}
+
+/**
+ * Dismisses ai-referee CHANGES_REQUESTED reviews left on earlier commits —
+ * otherwise a stale rejection keeps blocking the PR after the head moved.
+ * Only reviews carrying our marker are touched; human reviews are never
+ * dismissed. Returns the number dismissed.
+ */
+async function dismissStaleReviews(cwd: string, pr: number, head: string): Promise<number> {
+  const reviews = await git.ghListPrReviews(cwd, pr);
+  const stale = reviews.filter(
+    (r) => r.state === "CHANGES_REQUESTED" && r.commit_id !== head && r.body.includes(REVIEW_MARKER),
+  );
+  let dismissed = 0;
+  for (const r of stale) {
+    await git.ghDismissPrReview(cwd, pr, r.id, `ai-referee: superseded by ${head.slice(0, 10)}`);
+    dismissed++;
+  }
+  return dismissed;
 }

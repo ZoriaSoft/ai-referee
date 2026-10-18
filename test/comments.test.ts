@@ -42,6 +42,7 @@ function report(findings: Finding[], verdict: "APPROVE" | "REJECT" = "REJECT"): 
     findings,
     chunks: [],
     reasons: verdict === "REJECT" ? ["reviewer rejected"] : [],
+    warnings: [],
     fix: { requested: false, ran: false, detail: null },
     comments: { requested: true, posted: false, detail: null },
   };

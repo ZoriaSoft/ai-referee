@@ -4,6 +4,33 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+
+## [Unreleased] — round 4 (2026-10-18)
+
+### Added
+
+- Stale review dismissal: posted PR reviews carry an invisible
+  `<!-- ai-referee:review -->` marker; after each new verdict post,
+  ai-referee `CHANGES_REQUESTED` reviews on older commits are dismissed via
+  `gh api .../reviews/{id}/dismissals`. Dismissal is best-effort (recorded in
+  `comments.detail`), touches only marked reviews, and never flips the verdict.
+- `GateReport.warnings`: non-blocking issues surfaced separately from gate
+  `reasons`; rendered as a "Warnings" section in Markdown reports.
+- `test/daemon.test.ts`: `pollDelayMs` backoff curve and `daemon --once`
+  smoke tests against a fake `gh`.
+
+### Changed
+
+- Light-profile gate semantics: a `light` chunk REJECT that cites no
+  `blocker` finding now downgrades to a warning instead of blocking — the
+  profile's "only merge-stoppers gate" contract is enforced at the gate, not
+  just in the prompt. Zero-finding REJECTs still fail closed (they cannot be
+  reclassified).
+- Daemon scheduling: chained `setTimeout` replaces `setInterval`, so a slow
+  review pass can never overlap the next poll. Consecutive `gh pr list`
+  failures back off exponentially (2ⁿ⁻¹× base, capped at 8×) with the next
+  delay logged.
+
 ## [Unreleased] — round 3 (2026-10-18)
 
 ### Added

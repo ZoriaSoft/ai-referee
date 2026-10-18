@@ -152,3 +152,46 @@ export async function ghPostReview(cwd: string, pr: number, payload: GhReviewPay
   }
   return res.stdout.trim();
 }
+
+/** One PR review as returned by `GET /pulls/{n}/reviews`. */
+export interface GhPrReview {
+  id: number;
+  state: string;
+  commit_id: string;
+  body: string;
+  user: { login: string } | null;
+}
+
+/** All reviews on a PR (up to 200, newest-last from the API). */
+export async function ghListPrReviews(cwd: string, pr: number): Promise<GhPrReview[]> {
+  const res = await run(`gh api "repos/{owner}/{repo}/pulls/${pr}/reviews?per_page=100"`, {
+    cwd,
+    timeoutMs: 60_000,
+  });
+  if (res.exitCode !== 0) {
+    throw new GitError(`gh api reviews failed: ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+  const parsed: unknown = JSON.parse(res.stdout);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(
+    (x): x is GhPrReview =>
+      typeof x === "object" && x !== null &&
+      typeof (x as GhPrReview).id === "number" &&
+      typeof (x as GhPrReview).state === "string",
+  );
+}
+
+/**
+ * Dismisses one PR review (PUT .../reviews/{id}/dismissals). Used to retract
+ * ai-referee CHANGES_REQUESTED reviews that a newer head superseded.
+ */
+export async function ghDismissPrReview(cwd: string, pr: number, reviewId: number, message: string): Promise<void> {
+  const res = await run(`gh api repos/{owner}/{repo}/pulls/${pr}/reviews/${reviewId}/dismissals -X PUT --input -`, {
+    cwd,
+    stdin: JSON.stringify({ message }),
+    timeoutMs: 60_000,
+  });
+  if (res.exitCode !== 0) {
+    throw new GitError(`gh api dismissals failed: ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+}

@@ -85,6 +85,8 @@ export interface GateReport {
   chunks: ChunkResult[];
   /** Human-readable gate reasons for REJECT. */
   reasons: string[];
+  /** Non-blocking issues worth surfacing (e.g. light-profile REJECTs without blocker findings). */
+  warnings: string[];
   fix: {
     requested: boolean;
     ran: boolean;

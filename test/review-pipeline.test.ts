@@ -291,7 +291,12 @@ describe("runReview pipeline", () => {
       join(fakebin, "gh"),
       `#!/bin/sh\n` +
         `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
-        `if [ "$1" = "api" ]; then cat > '${capStdin}'; echo "$@" > '${capArgs}'; echo '{}'; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then\n` +
+        `  case "$*" in\n` +
+        `    *" -X POST"*) cat > '${capStdin}'; echo "$@" > '${capArgs}'; echo '{}'; exit 0;;\n` +
+        `    *reviews* ) echo '[]'; exit 0;;\n` +
+        `  esac\n` +
+        `fi\n` +
         `exit 1`,
     );
     await chmod(join(fakebin, "gh"), 0o755);
@@ -437,6 +442,99 @@ describe("runReview pipeline", () => {
     expect(secPrompt).toContain("Review mode: strict");
     expect(report.chunks.find((c) => c.route === "src/auth/**")!.profile).toBe("strict");
     expect(report.chunks.find((c) => c.route === null)!.profile).toBe("light");
+  });
+
+  it("light profile: REJECT without blocker findings becomes a warning, not a gate block", async () => {
+    const lightReject = `{"verdict":"REJECT","summary":"minor stuff","findings":[{"file":"a.ts","line":2,"severity":"minor","message":"nit"},{"file":"a.ts","line":3,"severity":"major","message":"questionable but not blocking"}]}`;
+    const report = await runReview({
+      cwd: dir,
+      profile: "light",
+      config: cfg({ reviewers: [{ name: "r", type: "cli", command: echo(lightReject) }] }),
+      base: "main",
+    });
+    expect(report.verdict).toBe("APPROVE");
+    expect(report.reasons).toEqual([]);
+    expect(report.warnings.join(" ")).toContain("light");
+    expect(report.findings).toHaveLength(2);
+  });
+
+  it("light profile: REJECT with a blocker finding still gates", async () => {
+    const blockerReject = `{"verdict":"REJECT","summary":"boom","findings":[{"file":"a.ts","line":2,"severity":"blocker","message":"data loss"}]}`;
+    const report = await runReview({
+      cwd: dir,
+      profile: "light",
+      config: cfg({ reviewers: [{ name: "r", type: "cli", command: echo(blockerReject) }] }),
+      base: "main",
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.warnings).toEqual([]);
+  });
+
+  it("light profile: REJECT with no findings still fails closed", async () => {
+    const bareReject = `{"verdict":"REJECT","summary":"i just don't like it","findings":[]}`;
+    const report = await runReview({
+      cwd: dir,
+      profile: "light",
+      config: cfg({ reviewers: [{ name: "r", type: "cli", command: echo(bareReject) }] }),
+      base: "main",
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.reasons.join(" ")).toContain("reviewer rejected");
+  });
+
+  it("dismisses its own stale CHANGES_REQUESTED reviews after posting", async () => {
+    const remote = join(dir, "remote3.git");
+    await sh(`git init -q --bare '${remote}'`);
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    const mainSha = (await run("git rev-parse main", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/9/head ${featSha}`);
+
+    // Stale reviews: one ours on the old head (dismiss), one ours on the new
+    // head (keep — it is the review we just posted), one human's (keep).
+    const staleList = JSON.stringify([
+      { id: 42, state: "CHANGES_REQUESTED", commit_id: mainSha, body: "ai-referee stuff <!-- ai-referee:review -->", user: { login: "bot" } },
+      { id: 43, state: "CHANGES_REQUESTED", commit_id: featSha, body: "fresh <!-- ai-referee:review -->", user: { login: "bot" } },
+      { id: 44, state: "CHANGES_REQUESTED", commit_id: mainSha, body: "human review, no marker", user: { login: "alice" } },
+    ]);
+
+    const fakebin = join(dir, "fakebin3");
+    await mkdir(fakebin);
+    const capDismissals = join(dir, "gh-dismissals.txt");
+    const staleFile = join(dir, "gh-reviews.json");
+    await writeFile(staleFile, staleList);
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then\n` +
+        `  case "$*" in\n` +
+        `    *" -X PUT"*) cat > /dev/null; echo "$2" >> '${capDismissals}'; echo '{}'; exit 0;;\n` +
+        `    *" -X POST"*) cat > /dev/null; echo '{}'; exit 0;;\n` +
+        `    *reviews* ) cat '${staleFile}'; exit 0;;\n` +
+        `  esac\n` +
+        `fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 9,
+        postComments: true,
+        config: cfg({ reviewers: [{ name: "ok", type: "cli", command: echo(APPROVE) }] }),
+      });
+      expect(report.comments.posted).toBe(true);
+      expect(report.comments.detail).toContain("dismissed 1 superseded review(s)");
+      const dismissals = (await readFile(capDismissals, "utf8")).trim();
+      expect(dismissals).toContain("pulls/9/reviews/42/dismissals");
+      expect(dismissals).not.toContain("reviews/43/dismissals");
+      expect(dismissals).not.toContain("reviews/44/dismissals");
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
 });

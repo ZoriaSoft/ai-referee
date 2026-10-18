@@ -45,7 +45,10 @@ npx ai-referee review --pr 137 --format markdown
 ```
 
 Post the verdict back to the PR as a GitHub review — findings that anchor to
-diff lines become inline comments, the rest go in the review body:
+diff lines become inline comments, the rest go in the review body. Each posted
+review carries an invisible `ai-referee` marker; when a new head gets reviewed,
+superseded ai-referee `CHANGES_REQUESTED` reviews are dismissed automatically
+so an old rejection cannot block a fixed PR. Human reviews are never touched:
 
 ```bash
 npx ai-referee review --pr 137 --comment
@@ -69,6 +72,28 @@ Run a polling daemon that reviews every new PR head:
 ```bash
 npx ai-referee daemon --interval 120       # add --once for a single pass
 ```
+
+Polls run back-to-back, never overlapping: a slow review pass simply delays the
+next cycle. When `gh` fails, the poll interval backs off exponentially (up to
+8×) until the API recovers. To run it under systemd:
+
+```ini
+# ~/.config/systemd/user/ai-referee.service
+[Unit]
+Description=ai-referee PR merge gate
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/you/your-repo
+ExecStart=/usr/bin/npx ai-referee daemon --interval 120 --comment
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+Enable with `systemctl --user enable --now ai-referee.service`.
 
 ## How it works
 
@@ -101,7 +126,10 @@ npx ai-referee daemon --interval 120       # add --once for a single pass
 
 Two prompt profiles: **strict** (default) reviews fully; **light** only
 rejects on merge-stoppers (crashes, data loss, security holes) and treats
-everything else as minor/info findings. Per run:
+everything else as minor/info findings. The gate mirrors that contract: a
+light-profile REJECT that cites no `blocker` finding is downgraded to a
+warning in the report instead of blocking — a REJECT with zero findings can't
+be reclassified, so it still fails closed. Per run:
 
 ```bash
 npx ai-referee review --light       # or --strict; or "profile" in config
