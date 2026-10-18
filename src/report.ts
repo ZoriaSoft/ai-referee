@@ -1,0 +1,74 @@
+import type { GateReport } from "./types.js";
+
+const SEVERITY_BADGE: Record<string, string> = {
+  blocker: "BLOCKER",
+  major: "MAJOR",
+  minor: "MINOR",
+  info: "INFO",
+};
+
+export function toJson(report: GateReport): string {
+  return JSON.stringify(report, null, 2);
+}
+
+export function toMarkdown(report: GateReport): string {
+  const lines: string[] = [];
+  lines.push(`# ${report.verdict === "APPROVE" ? "APPROVED" : "REJECTED"} — ai-referee`);
+  lines.push("");
+  lines.push(
+    `**Target:** ${report.target.kind === "pr" ? `PR #${report.target.pr}` : "local"} ` +
+      `\`${report.target.base}…${report.target.head}\``,
+  );
+  lines.push(
+    `**Diff:** ${report.stats.filesChanged} files, +${report.stats.insertions}/-${report.stats.deletions}, ` +
+      `${report.stats.chunks} chunk(s)`,
+  );
+  if (report.tests.ran) {
+    lines.push(
+      `**Tests:** ${report.tests.passed ? "passed" : "FAILED"} — \`${report.tests.command}\``,
+    );
+  } else {
+    lines.push(`**Tests:** ${report.tests.command ? "skipped" : "not configured"}`);
+  }
+  lines.push("");
+  lines.push(`**Summary:** ${report.summary}`);
+
+  if (report.reasons.length) {
+    lines.push("", "## Gate reasons", "");
+    for (const r of report.reasons) lines.push(`- ${r}`);
+  }
+
+  if (report.findings.length) {
+    lines.push("", "## Findings", "");
+    for (const f of report.findings) {
+      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      lines.push(`- **${SEVERITY_BADGE[f.severity] ?? f.severity.toUpperCase()}** \`${loc}\` — ${f.message}`);
+      if (f.suggestion) lines.push(`  - hint: ${f.suggestion}`);
+    }
+  }
+
+  const attempts = report.chunks.flatMap((c) =>
+    c.attempts.map((a) => ({ chunk: c.index + 1, ...a })),
+  );
+  if (attempts.length) {
+    lines.push("", "## Referee log", "");
+    lines.push("| chunk | referee | result | ms | detail |");
+    lines.push("|---|---|---|---|---|");
+    for (const a of attempts) {
+      lines.push(
+        `| ${a.chunk} | ${a.reviewer} | ${a.ok ? "answered" : "failed"} | ${a.durationMs} | ${a.detail.replaceAll("|", "\\|")} |`,
+      );
+    }
+  }
+
+  if (report.tests.ran && !report.tests.passed && report.tests.outputTail) {
+    lines.push("", "## Test output (tail)", "", "```", report.tests.outputTail, "```");
+  }
+
+  if (report.fix.ran) {
+    lines.push("", "## Fix round", "", report.fix.detail ?? "ran");
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}

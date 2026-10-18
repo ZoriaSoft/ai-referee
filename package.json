@@ -1,0 +1,29 @@
+{
+  "name": "ai-referee",
+  "version": "0.1.0",
+  "description": "Local, self-hosted merge gate: runs your tests, sends the diff to any agent CLI or OpenAI-compatible API, and blocks the merge on REJECT. No referee, no merge.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "ai-referee": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.tr.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

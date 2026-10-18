@@ -1,0 +1,41 @@
+# ai-referee — agent notes
+
+Local, self-hosted merge gate. TypeScript, Node 20+, zero runtime dependencies.
+Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
+
+## Layout
+
+| File | Responsibility |
+|---|---|
+| `src/cli.ts` | arg parsing, subcommands (`review`, `daemon`, `hook install`, `init`), exit codes |
+| `src/review.ts` | pipeline: resolve target → diff → chunk → tests → review → verdict → optional fix round → optional gh merge |
+| `src/reviewer.ts` | reviewer adapters (`cli`, `api`) + sequential fallback chain |
+| `src/verdict.ts` | strict verdict extraction/validation from messy model output |
+| `src/diff.ts` | unified-diff splitting, glob matching, budget chunking |
+| `src/config.ts` | `.ai-referee.json` loading (lenient JSON: comments + trailing commas) |
+| `src/daemon.ts` | `gh pr list` polling loop, per-PR head-SHA dedupe, report files |
+| `src/hook.ts` | pre-push hook installer (preserves foreign hooks) |
+| `src/git.ts` | git/gh shell wrappers; PR review uses `refs/pull/<n>/head` + temp worktree |
+| `src/exec.ts` | `bash -c` runner with timeout + output caps; never throws |
+| `src/loose-json.ts` | comment/trailing-comma-tolerant JSON.parse |
+| `src/report.ts` | Markdown + JSON report rendering |
+| `src/prompt.ts` | reviewer/fixer prompt templates |
+
+## Invariants — do not break
+
+- **Fail closed.** Any missing/invalid verdict, dead reviewer chain, or test failure
+  yields REJECT. Nothing may approve without a live reviewer verdict.
+- **One fix round max.** Never loop fix→review.
+- Reviewer output is untrusted: always via `parseVerdict`, never `JSON.parse` directly.
+- CLI reviewer commands run via `bash -c` with `{prompt}`/`{prompt_file}`/stdin
+  prompt passing — keep all three paths working.
+- Exit codes: 0 APPROVE, 1 REJECT, 2 operational error.
+- No runtime deps in `dependencies` — stdlib only.
+
+## Build/test
+
+Builds and tests run on the sandbox only:
+`cirak-run "npx tsc -p tsconfig.json --noEmit && npx vitest run"`.
+
+Test suite: `test/` — pipeline tests spin up throwaway git repos with fake
+reviewer shell scripts; keep them hermetic (tmpdir only, no network).
