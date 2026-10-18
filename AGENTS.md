@@ -7,11 +7,13 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 
 | File | Responsibility |
 |---|---|
-| `src/cli.ts` | arg parsing, subcommands (`review`, `daemon`, `hook install`, `init`), exit codes |
-| `src/review.ts` | pipeline: resolve target → diff → chunk → tests → review → verdict → optional fix round → optional gh merge |
-| `src/reviewer.ts` | reviewer adapters (`cli`, `api`) + sequential fallback chain |
+| `src/cli.ts` | arg parsing, subcommands (`review`, `daemon`, `hook install`, `doctor`, `init`), exit codes |
+| `src/review.ts` | pipeline: resolve target → diff → chunk → tests → review → verdict → optional fix round → optional gh merge/review post |
+| `src/reviewer.ts` | reviewer adapters (`cli`, `api`), sequential fallback chain, `cliCommandBinary`, token usage capture |
+| `src/comments.ts` | finding→inline-comment anchoring (rightLines) + GitHub PR review payload builder |
+| `src/doctor.ts` | `doctor` sanity checks: repo, config, reviewer binaries/keys, gh auth |
 | `src/verdict.ts` | strict verdict extraction/validation from messy model output |
-| `src/diff.ts` | unified-diff splitting, glob matching, budget chunking |
+| `src/diff.ts` | unified-diff splitting, glob matching, budget chunking, right-side line map |
 | `src/config.ts` | `.ai-referee.json` loading (lenient JSON: comments + trailing commas) |
 | `src/daemon.ts` | `gh pr list` polling loop, per-PR head-SHA dedupe, report files |
 | `src/hook.ts` | pre-push hook installer (preserves foreign hooks) |
@@ -30,6 +32,9 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 - CLI reviewer commands run via `bash -c` with `{prompt}`/`{prompt_file}`/stdin
   prompt passing — keep all three paths working.
 - Exit codes: 0 APPROVE, 1 REJECT, 2 operational error.
+- PR review posting is best-effort: failures land in `report.comments.detail`,
+  never flip the verdict. Inline comments only on right-side lines that the
+  diff actually shows (`FileDiff.rightLines`).
 - No runtime deps in `dependencies` — stdlib only.
 
 ## Build/test

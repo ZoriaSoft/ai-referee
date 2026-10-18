@@ -127,3 +127,28 @@ export async function ghListOpenPrs(cwd: string): Promise<GhPrSummary[]> {
       typeof (x as GhPrSummary).headRefOid === "string",
   );
 }
+
+export interface GhReviewPayload {
+  commit_id: string;
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+  body: string;
+  comments: { path: string; line: number; side: "RIGHT"; body: string }[];
+}
+
+/**
+ * Posts a PR review (verdict event + anchored inline comments) through
+ * `gh api`. The {owner}/{repo} placeholders are resolved by gh from the
+ * repo's remote; the JSON payload travels on stdin so nothing needs shell
+ * quoting.
+ */
+export async function ghPostReview(cwd: string, pr: number, payload: GhReviewPayload): Promise<string> {
+  const res = await run(`gh api repos/{owner}/{repo}/pulls/${pr}/reviews -X POST --input -`, {
+    cwd,
+    stdin: JSON.stringify(payload),
+    timeoutMs: 60_000,
+  });
+  if (res.exitCode !== 0) {
+    throw new GitError(`gh api review failed: ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+  return res.stdout.trim();
+}

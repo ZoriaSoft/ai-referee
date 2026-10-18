@@ -3,18 +3,36 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerConfig } from "./config.js";
 import { run, shellEscape } from "./exec.js";
-import type { ReviewerAttempt } from "./types.js";
+import type { ReviewerAttempt, TokenUsage } from "./types.js";
 
 export interface ReviewerResponse {
   ok: boolean;
   output: string;
   detail: string;
   durationMs: number;
+  /** Token usage when the reviewer is an api endpoint that reports it. */
+  tokens?: TokenUsage;
 }
 
 export interface Reviewer {
   name: string;
   invoke(prompt: string, cwd: string): Promise<ReviewerResponse>;
+}
+
+/**
+ * First non-assignment word of a cli reviewer command — the binary to
+ * preflight. Compound commands (env prefixes, pipes…) yield null; bash's
+ * own 127 then reports missing binaries at invoke time.
+ */
+export function cliCommandBinary(command: string): string | null {
+  // Shell metacharacters mean the first word is not the whole story —
+  // pipes, chains and redirects can hide missing binaries further right.
+  if (/[|&;<>()`$]/.test(command)) return null;
+  const firstWord = command
+    .trim()
+    .split(/\s+/)
+    .find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
+  return /^[A-Za-z0-9_./-]+$/.test(firstWord) ? firstWord : null;
 }
 
 const REVIEWER_TIMEOUT_DEFAULT = 10 * 60 * 1000;
@@ -29,14 +47,7 @@ function cliReviewer(cfg: ReviewerConfig): Reviewer {
   const usesPromptFile = command.includes("{prompt_file}");
   const usesInline = command.includes("{prompt}");
   const pipeStdin = cfg.stdin ?? (!usesPromptFile && !usesInline);
-  // First non-assignment word; existence-prechecked only when it looks like a
-  // plain binary path. Compound commands (env prefixes, pipes…) skip the check
-  // and rely on bash's own 127 for missing binaries.
-  const firstWord = command
-    .trim()
-    .split(/\s+/)
-    .find((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) ?? "";
-  const bin = /^[A-Za-z0-9_./-]+$/.test(firstWord) ? firstWord : null;
+  const bin = cliCommandBinary(command);
 
   return {
     name: cfg.name,
@@ -129,18 +140,28 @@ function apiReviewer(cfg: ReviewerConfig): Reviewer {
           };
         }
         let content: string | null = null;
+        let tokens: TokenUsage | undefined;
         try {
           const parsed = JSON.parse(body) as {
             choices?: { message?: { content?: string } }[];
+            usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
           };
           content = parsed.choices?.[0]?.message?.content ?? null;
+          const u = parsed.usage;
+          if (u && typeof u.total_tokens === "number") {
+            tokens = {
+              prompt: u.prompt_tokens ?? 0,
+              completion: u.completion_tokens ?? 0,
+              total: u.total_tokens,
+            };
+          }
         } catch {
           content = null;
         }
         if (!content) {
           return { ok: false, output: "", detail: "response had no choices[0].message.content", durationMs };
         }
-        return { ok: true, output: content, detail: "", durationMs };
+        return { ok: true, output: content, detail: "", durationMs, tokens };
       } catch (err) {
         const durationMs = Date.now() - started;
         const msg = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
@@ -165,8 +186,15 @@ export async function invokeChain(
   const attempts: ReviewerAttempt[] = [];
   for (const reviewer of reviewers) {
     const res = await reviewer.invoke(prompt, cwd);
-    attempts.push({ reviewer: reviewer.name, ok: res.ok, detail: res.detail, durationMs: res.durationMs });
+    attempts.push({
+      reviewer: reviewer.name,
+      ok: res.ok,
+      detail: res.detail,
+      durationMs: res.durationMs,
+      ...(res.tokens ? { tokens: res.tokens } : {}),
+    });
     if (res.ok) return { response: res, attempts };
   }
+
   return { response: null, attempts };
 }

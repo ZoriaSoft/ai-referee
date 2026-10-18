@@ -22,6 +22,10 @@ export function buildReviewPrompt(opts: {
   base: string;
   head: string;
   repoNote: string | null;
+  /** Post-change bodies of files in the chunk, for context beyond the hunks. */
+  contextFiles?: { path: string; content: string }[];
+  /** Files whose bodies were skipped because the context budget ran out. */
+  contextSkipped?: string[];
 }): string {
   const { index, files, patch, truncated, totalChunks, base, head, repoNote } = opts;
   const parts: string[] = [
@@ -56,6 +60,20 @@ export function buildReviewPrompt(opts: {
     patch,
     "```",
   );
+  const contextFiles = opts.contextFiles ?? [];
+  if (contextFiles.length || (opts.contextSkipped?.length ?? 0) > 0) {
+    parts.push(
+      "",
+      "Full file contents after the change (context only — review the diff,",
+      "do not report findings on unchanged code unless the diff broke it):",
+    );
+    for (const f of contextFiles) {
+      parts.push("", `--- ${f.path}`, "```", f.content, "```");
+    }
+    if (opts.contextSkipped?.length) {
+      parts.push("", `File bodies omitted over the context budget: ${opts.contextSkipped.join(", ")}`);
+    }
+  }
   return parts.join("\n");
 }
 

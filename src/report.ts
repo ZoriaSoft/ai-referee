@@ -30,6 +30,13 @@ export function toMarkdown(report: GateReport): string {
   } else {
     lines.push(`**Tests:** ${report.tests.command ? "skipped" : "not configured"}`);
   }
+  if (report.stats.tokens) {
+    const t = report.stats.tokens;
+    lines.push(`**Tokens:** ${t.total.toLocaleString("en-US")} total (${t.prompt} prompt / ${t.completion} completion)`);
+  }
+  if (report.comments.requested) {
+    lines.push(`**PR review:** ${report.comments.posted ? "posted" : "FAILED"} — ${report.comments.detail ?? ""}`);
+  }
   lines.push("");
   lines.push(`**Summary:** ${report.summary}`);
 

@@ -32,33 +32,48 @@ Owner decides.
 - [x] Markdown + JSON reports, `--format`, `--out`, exit codes 0/1/2
 - [x] 63 tests incl. end-to-end pipeline against fake reviewer scripts
 
+## Done — round 2
+
+- [x] **Findings → PR review comments**: `--comment`/`prComments` posts the
+      verdict as a GitHub review (`APPROVE`/`REQUEST_CHANGES`) via `gh api`;
+      daemon `--comment` for every polled PR
+- [x] **Diff-aware line anchoring**: `FileDiff.rightLines` maps new-side line
+      numbers; findings anchor only to lines GitHub accepts — the rest go to
+      the review body (a comment on the wrong line is worse than no inline)
+- [x] **Context enrichment**: `contextBudget` (default 40k) appends post-change
+      file bodies to prompts
+- [x] **Chunk-level parallelism**: `reviewConcurrency` (default 2, max 8)
+      worker pool; deterministic chunk/result ordering preserved
+- [x] **`ai-referee doctor`**: repo, config, workdir, reviewer binaries/API
+      keys, gh auth — one command, exit 0/2
+- [x] **Cost/token reporting**: api reviewer `usage` → per-attempt tokens +
+      `stats.tokens` in reports
+- [x] `cliCommandBinary` hardening: compound commands (pipes, redirects) now
+      skip the precheck instead of masking missing binaries
+
 ## Next (priority order)
 
-- [ ] **Findings → PR review comments**: post inline comments via `gh api` when
-      reviewing `--pr`; daemon flag `--comment`.
-- [ ] **Diff-aware line anchoring**: map model-reported lines to diff positions
-      for accurate GitHub review placement.
 - [ ] **Review quality presets**: `--strict`/`--light` prompt profiles;
       per-path reviewer routing (e.g. security reviewer for auth files).
-- [ ] **Context enrichment**: include changed files' full bodies (or symbol
-      snippets) when under a size cap — models review better with context.
-- [ ] **Chunk-level parallelism**: review chunks concurrently with a cap
-      (default 2) for large PRs; keep deterministic ordering of findings.
 - [ ] **Fix round for PR targets**: push fixes to the PR branch when the user
       has push rights (`--fix --push`).
-- [ ] **Daemon polish**: exponential backoff on `gh` failures, optional `gh pr
-      comment` verdict posting, systemd unit example in docs.
+- [ ] **Daemon polish**: exponential backoff on `gh` failures, systemd unit
+      example in docs.
 - [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
-- [ ] **`ai-referee doctor`**: verify reviewer binaries resolve, api keys set,
-      gh auth status, config sanity in one command.
-- [ ] **Cost/token reporting**: capture token usage from api reviewers into the
-      report (prompt/completion counts when the endpoint returns them).
+- [ ] **Review dismissal on new pushes**: daemon re-reviews after new commits,
+      but the old REQUEST_CHANGES stays — dismiss superseded reviews via `gh api`.
+- [ ] **Multi-line inline comments**: GitHub supports start_line+line ranges;
+      models would need to report line ranges, not single lines.
+- [ ] **Comment threading on unchanged code**: findings on unchanged lines
+      adjacent to the diff could anchor via `subject_type: "file"`.
 
 ## Known limits
 
-- Reviewer sees diff + README excerpt only; no symbol-level codebase context.
+- Reviewer sees diff + README excerpt + file bodies under `contextBudget`;
+  no cross-file symbol resolution.
 - `cli` reviewers require bash (POSIX environments; Windows unsupported).
-- Daemon requires `gh` CLI + GitHub remote; plain-git hosting has no PR mode.
+- Daemon/PR modes require `gh` CLI + GitHub remote; plain-git hosting has no
+  PR mode (local `--base` diffs still work everywhere).
 - One fix round by design; no iterative fix loops.
 - LLM verdicts are heuristics, not proofs — the gate blocks slop, it does not
   guarantee correctness.

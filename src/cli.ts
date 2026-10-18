@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { CONFIG_FILENAME, loadConfig, type Config } from "./config.js";
 import { runDaemon } from "./daemon.js";
+import { runDoctor } from "./doctor.js";
 import { repoRoot } from "./git.js";
 import { installHook } from "./hook.js";
 import { toJson, toMarkdown } from "./report.js";
@@ -17,6 +18,7 @@ USAGE
   ai-referee review [options]     review a diff and print a gate verdict
   ai-referee daemon [options]     poll open PRs and review each new head
   ai-referee hook install         install the pre-push git hook
+  ai-referee doctor               check config, reviewers and gh in one pass
   ai-referee init                 write a starter ${CONFIG_FILENAME}
   ai-referee --version
 
@@ -26,6 +28,7 @@ REVIEW OPTIONS
   --uncommitted       include uncommitted working-tree changes
   --fix               one fixer round on REJECT, then re-review (local only)
   --merge             gh pr merge when the verdict is APPROVE (PR only)
+  --comment           post the verdict + findings as a GitHub PR review (PR only)
   --skip-tests        skip the configured test command
   --format <fmt>      markdown | json | both   (default: markdown on a TTY, json when piped)
   --out <path>        write the report to a file instead of stdout
@@ -35,6 +38,7 @@ DAEMON OPTIONS
   --interval <sec>    poll interval (default: config or 120)
   --once              single poll, then exit
   --merge             auto-merge PRs that pass the gate
+  --comment           post each verdict as a GitHub PR review
   --fix               run one fixer round on REJECT (no-op for PR worktrees)
 
 EXIT CODES
@@ -65,6 +69,14 @@ const STARTER_CONFIG = `{
   // Optional: command that fixes findings on REJECT (prompt on stdin).
   // "fixerCommand": "claude -p --permission-mode acceptEdits",
 
+  // Optional: post verdicts + anchored findings as GitHub PR reviews
+  // (same as passing --comment; needs gh api access).
+  // "prComments": true,
+
+  // Chunks reviewed concurrently (1-8). Full changed-file bodies are
+  // appended to prompts up to contextBudget chars (0 disables).
+  // "reviewConcurrency": 2, "contextBudget": 40000,
+
   "chunkBudget": 100000,
   "exclude": ["*.lock", "package-lock.json", "dist/**", "*.min.js"]
 }
@@ -76,7 +88,7 @@ interface CliArgs {
 }
 
 function splitCommand(argv: string[]): CliArgs {
-  const known = new Set(["review", "daemon", "hook", "init", "help"]);
+  const known = new Set(["review", "daemon", "hook", "init", "help", "doctor"]);
   const first = argv.find((a) => !a.startsWith("-"));
   if (first && known.has(first)) {
     return { command: first, rest: argv.filter((a) => a !== first) };
@@ -97,6 +109,8 @@ async function main(): Promise<number> {
       return 0;
     case "init":
       return cmdInit();
+    case "doctor":
+      return cmdDoctor(rest);
     case "hook":
       return cmdHook(rest);
     case "daemon":
@@ -125,6 +139,7 @@ function parseCommon(rest: string[]) {
       config: { type: "string" },
       interval: { type: "string" },
       once: { type: "boolean", default: false },
+      comment: { type: "boolean", default: false },
     },
   });
 }
@@ -160,6 +175,7 @@ async function cmdReview(rest: string[]): Promise<number> {
       skipTests: v["skip-tests"],
       fix: v.fix,
       autoMerge: v.merge,
+      postComments: (v.comment || config.prComments) && pr !== undefined,
     });
   } catch (err) {
     if (err instanceof ReviewError) {
@@ -194,8 +210,15 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     intervalSec: v.interval ? Number.parseInt(v.interval, 10) : config.daemonIntervalSec,
     once: v.once,
     autoMerge: v.merge,
+    postComments: v.comment || config.prComments,
     fix: v.fix,
   });
+}
+
+async function cmdDoctor(rest: string[]): Promise<number> {
+  const { values: v } = parseCommon(rest);
+  const result = await runDoctor({ cwd: process.cwd(), configPath: v.config });
+  return result.healthy ? 0 : 2;
 }
 
 async function cmdHook(rest: string[]): Promise<number> {

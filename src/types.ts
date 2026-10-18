@@ -17,12 +17,20 @@ export interface ChunkVerdict {
   findings: Finding[];
 }
 
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
 export interface ReviewerAttempt {
   reviewer: string;
   ok: boolean;
   /** Short human-readable reason on failure: exit code, timeout, HTTP status. */
   detail: string;
   durationMs: number;
+  /** Token counts when an api reviewer reports usage; absent for cli. */
+  tokens?: TokenUsage;
 }
 
 export interface TestResult {
@@ -60,6 +68,8 @@ export interface GateReport {
     insertions: number;
     deletions: number;
     chunks: number;
+    /** Summed token usage across api reviewer calls, when reported. */
+    tokens?: TokenUsage;
   };
   tests: TestResult;
   verdict: Verdict;
@@ -71,6 +81,12 @@ export interface GateReport {
   fix: {
     requested: boolean;
     ran: boolean;
+    detail: string | null;
+  };
+  /** Posting findings back to the PR as a GitHub review (PR targets). */
+  comments: {
+    requested: boolean;
+    posted: boolean;
     detail: string | null;
   };
 }

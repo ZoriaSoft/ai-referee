@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildReviewer, invokeChain } from "../src/reviewer.js";
+import { buildReviewer, cliCommandBinary, invokeChain, type Reviewer } from "../src/reviewer.js";
 import type { ReviewerConfig } from "../src/config.js";
 
 const cli = (name: string, command: string, extra: Partial<ReviewerConfig> = {}): ReviewerConfig => ({
@@ -107,6 +107,28 @@ describe("apiReviewer", () => {
     vi.unstubAllGlobals();
   });
 
+  it("captures token usage from the response", async () => {
+    const body = {
+      choices: [{ message: { content: '{"verdict":"APPROVE","summary":"ok","findings":[]}' } }],
+      usage: { prompt_tokens: 1200, completion_tokens: 80, total_tokens: 1280 },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    const reviewer = buildReviewer({ name: "api", type: "api", url: "https://api.test/v1/chat/completions" });
+    const res = await reviewer.invoke("p", process.cwd());
+    expect(res.ok).toBe(true);
+    expect(res.tokens).toEqual({ prompt: 1200, completion: 80, total: 1280 });
+    vi.unstubAllGlobals();
+  });
+
+  it("omits tokens when the endpoint reports none", async () => {
+    const body = { choices: [{ message: { content: "x" } }] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    const reviewer = buildReviewer({ name: "api", type: "api", url: "https://api.test/v1/chat/completions" });
+    const res = await reviewer.invoke("p", process.cwd());
+    expect(res.tokens).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it("reports HTTP errors as failures", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("quota exceeded", { status: 429 })));
     const reviewer = buildReviewer({ name: "api", type: "api", url: "https://api.test/v1/chat/completions", model: "m" });
@@ -115,4 +137,37 @@ describe("apiReviewer", () => {
     expect(res.detail).toContain("429");
     vi.unstubAllGlobals();
   });
+
+});
+
+describe("cliCommandBinary", () => {
+  it("extracts the binary from plain and env-prefixed commands", () => {
+    expect(cliCommandBinary("claude -p")).toBe("claude");
+    expect(cliCommandBinary("FOO=1 claude -p")).toBe("claude");
+    expect(cliCommandBinary("/opt/bin/referee --flag")).toBe("/opt/bin/referee");
+  });
+
+  it("returns null for compound or non-binary commands", () => {
+    expect(cliCommandBinary("cat | jq .")).toBeNull();
+    expect(cliCommandBinary("exit 1")).toBe("exit");
+    expect(cliCommandBinary("")).toBeNull();
+  });
+});
+
+describe("invokeChain token propagation", () => {
+  it("carries token usage into the attempt log", async () => {
+    const fake: Reviewer = {
+      name: "metered",
+      invoke: async () => ({
+        ok: true,
+        output: "x",
+        detail: "",
+        durationMs: 1,
+        tokens: { prompt: 5, completion: 2, total: 7 },
+      }),
+    };
+    const { attempts } = await invokeChain([fake], "p", process.cwd());
+    expect(attempts[0]!.tokens).toEqual({ prompt: 5, completion: 2, total: 7 });
+  });
+
 });

@@ -7,6 +7,12 @@ export interface FileDiff {
   isBinary: boolean;
   isDeleted: boolean;
   isNew: boolean;
+  /**
+   * New-side (RIGHT) line numbers visible in the diff: added lines plus
+   * context lines inside hunks. GitHub accepts inline review comments only
+   * on these; empty for binary and deleted files.
+   */
+  rightLines: Set<number>;
 }
 
 const FILE_HEADER = /^diff --git a\/.+? b\/(.+)$/;
@@ -24,10 +30,34 @@ export function parseDiff(patch: string): FileDiff[] {
     const text = current.lines.join("\n");
     let insertions = 0;
     let deletions = 0;
+    const rightLines = new Set<number>();
+    let newLine = 0;
+    let inHunk = false;
     for (const line of current.lines) {
-      if (line.startsWith("+++") || line.startsWith("---")) continue;
-      if (line.startsWith("+")) insertions++;
-      else if (line.startsWith("-")) deletions++;
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        newLine = Number.parseInt(hunk[1]!, 10);
+        inHunk = true;
+        continue;
+      }
+      if (!inHunk) continue;
+      if (line.startsWith("+")) {
+        if (!line.startsWith("+++")) {
+          insertions++;
+          rightLines.add(newLine);
+          newLine++;
+        }
+      } else if (line.startsWith("-")) {
+        if (!line.startsWith("---")) deletions++;
+        // '-' consumes an old-side line only; newLine is unchanged.
+      } else if (line.startsWith("\\")) {
+        // "\ No newline at end of file" — consumes no line number.
+      } else if (line.startsWith(" ")) {
+        // Context line: present on both sides. Anything else (empty
+        // trailing lines, junk) consumes no line number.
+        rightLines.add(newLine);
+        newLine++;
+      }
     }
     files.push({
       path: current.path,
@@ -37,6 +67,7 @@ export function parseDiff(patch: string): FileDiff[] {
       isBinary: current.lines.some((l) => l.startsWith("Binary files") || l.startsWith("GIT binary patch")),
       isDeleted: current.lines.some((l) => l.startsWith("deleted file mode")),
       isNew: current.lines.some((l) => l.startsWith("new file mode")),
+      rightLines,
     });
     current = null;
   };

@@ -38,13 +38,18 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
   tek kullanımlık bir `git worktree` içinde inceler — checkout'una dokunmaz.
 - `testCommand` geçmezse REJECT — LLM devreye girmeden bile.
 - Büyük diff'leri `chunkBudget` altında parçalar; `exclude` glob'ları kilit
-  dosyalarını atlar.
-- Reviewer'ları sırayla dener (fallback chain); çıktısı bozuksa bir kez uyarır,
+  dosyalarını atlar; `contextBudget` kadar tam dosya içeriğini prompt'a ekler.
+- Parçaları `reviewConcurrency` (varsayılan 2) ile paralel inceler;
+  reviewer'ları sırayla dener (fallback chain); çıktısı bozuksa bir kez uyarır,
   yine olmazsa o parça başarısız sayılır → REJECT.
 - Markdown (TTY) ve JSON (pipe) rapor; `--format`, `--out`.
 - `--fix`: REJECT'te `fixerCommand`'ı bir kez çalıştırıp yeniden inceler.
+- `--comment`: PR'a GitHub review'ı olarak yazar — diff satırlarına denk gelen
+  bulgular satır içi yorum olur, kalanlar review gövdesine girer.
+- `doctor`: config, reviewer binary'leri, API anahtarları ve `gh` kimliğini
+  tek komutta doğrular.
 - `daemon`: `gh pr list`'i yoklar, her yeni PR head'ini bir kez inceler,
-  raporları `.ai-referee/reports/` altına yazar.
+  raporları `.ai-referee/reports/` altına yazar; `--comment` ile PR'a yazar.
 - `hook install`: REJECT'te push'u durduran pre-push kancası kurar.
 
 ## Mevcut araçlardan farkı
@@ -56,7 +61,8 @@ GitHub Actions gerekmez.
 
 ## Sınırlar
 
-- Reviewer sadece diff + README özeti görür (derin sembol bağlamı yok).
+- Reviewer diff + README özeti + `contextBudget` kadar tam dosya içeriği görür
+  (dosyalar arası sembol çözümlemesi yok).
 - Reviewer/test komutları `bash` ister; Windows desteklenmez.
 - PR/daemon modları `gh` CLI ve GitHub `origin` ister.
 - `--fix` tek tur ve yalnız yerel hedeflerde.

@@ -84,6 +84,7 @@ describe("chunkDiff", () => {
     isBinary: false,
     isDeleted: false,
     isNew: false,
+    rightLines: new Set<number>(),
   });
 
   it("packs small files into one chunk under budget", () => {
@@ -121,5 +122,39 @@ describe("chunkDiff", () => {
   it("assigns sequential indexes", () => {
     const files = [mkFile("a", 400), mkFile("b", 400), mkFile("c", 400)];
     expect(chunkDiff(files, 500).map((c) => c.index)).toEqual([0, 1, 2]);
+  });
+});
+
+describe("parseDiff rightLines", () => {
+  it("maps added and context lines to new-side line numbers", () => {
+    const files = parseDiff(SAMPLE);
+    const a = files.find((f) => f.path === "src/a.ts")!;
+    // Hunk @@ -1,3 +1,4 @@: context 1, +new 2, +added 3, context 4.
+    expect([...a.rightLines].sort((x, y) => x - y)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("keeps numbering across multiple hunks", () => {
+    const patch = `diff --git a/f.ts b/f.ts
+index 1..2 100644
+--- a/f.ts
++++ b/f.ts
+@@ -1,2 +1,3 @@
+ a
++b
+ c
+@@ -5,3 +6,3 @@
+ d
+-e
++e2
+ f
+`;
+    const f = parseDiff(patch)[0]!;
+    expect([...f.rightLines].sort((x, y) => x - y)).toEqual([1, 2, 3, 6, 7, 8]);
+  });
+
+  it("leaves rightLines empty for deleted and binary files", () => {
+    const files = parseDiff(SAMPLE);
+    expect(files.find((f) => f.path === "src/gone.ts")!.rightLines.size).toBe(0);
+    expect(files.find((f) => f.path === "img.png")!.rightLines.size).toBe(0);
   });
 });

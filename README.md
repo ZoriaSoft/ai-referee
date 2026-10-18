@@ -44,6 +44,20 @@ Review a GitHub PR in an isolated worktree (no checkout, no `gh pr checkout`):
 npx ai-referee review --pr 137 --format markdown
 ```
 
+Post the verdict back to the PR as a GitHub review — findings that anchor to
+diff lines become inline comments, the rest go in the review body:
+
+```bash
+npx ai-referee review --pr 137 --comment
+```
+
+Sanity-check the whole setup in one pass (config, reviewer binaries, API
+keys, `gh` auth):
+
+```bash
+npx ai-referee doctor
+```
+
 Block bad pushes locally:
 
 ```bash
@@ -67,14 +81,19 @@ npx ai-referee daemon --interval 120       # add --once for a single pass
 3. **Chunk the diff.** Files are grouped under `chunkBudget` chars (default
    100k). Excluded paths (`*.lock`, `dist/**`, …) are counted but not sent.
    Oversized single files are truncated at a line boundary with a marker.
-4. **Review.** Each chunk goes to the reviewer chain in order — the first
-   reviewer that produces output wins. Garbage output gets one retry nudge;
-   unparseable output → that chunk fails → REJECT.
+   Full file bodies are appended under `contextBudget` (default 40k) so the
+   reviewer sees surrounding code, not just hunks.
+4. **Review.** Chunks run `reviewConcurrency` at a time (default 2) against
+   the reviewer chain in order — the first reviewer that produces output
+   wins. Garbage output gets one retry nudge; unparseable output → that
+   chunk fails → REJECT.
 5. **Decide.** REJECT if tests failed, any chunk failed, or any chunk verdict
    is REJECT; otherwise APPROVE. Findings are deduplicated and severity-sorted.
 6. **Report.** Markdown (TTY) or JSON (piped), `--format`, `--out`.
 7. **Optional:** `--fix` runs `fixerCommand` once on REJECT and re-reviews
    (local targets only). `--merge` runs `gh pr merge` on APPROVE (PR only).
+   `--comment` posts a GitHub PR review: APPROVE or REQUEST_CHANGES with
+   findings anchored to diff lines as inline comments.
 
 ## Reviewer config
 
@@ -101,6 +120,9 @@ Ordered fallback chain — put your cheapest/most available reviewer first.
 A reviewer "fails" on missing binary, non-zero exit, empty output, timeout, or
 HTTP error — the chain just moves on, and every attempt is logged in the report.
 
+When an `api` reviewer reports `usage`, token counts are summed into
+`stats.tokens` in the report and shown in the Markdown header.
+
 ## Full config reference
 
 | Key | Default | Meaning |
@@ -108,11 +130,14 @@ HTTP error — the chain just moves on, and every attempt is logged in the repor
 | `testCommand` | `null` | Command that must pass; `null` disables the test step |
 | `testTimeoutMs` | 600000 | Test timeout |
 | `chunkBudget` | 100000 | Max diff chars per review chunk |
+| `contextBudget` | 40000 | Max chars of full file bodies appended to prompts; `0` disables |
 | `exclude` | locks, dist, min.js, snaps | Path globs skipped in review |
 | `reviewers` | `[]` | Ordered fallback chain (see above) |
+| `reviewConcurrency` | 2 | Chunks reviewed in parallel (1–8) |
 | `fixerCommand` | `null` | Fixer CLI; gets findings on stdin, cwd = worktree |
 | `fixerTimeoutMs` | 600000 | Fixer timeout |
 | `autoMerge` | `false` | Allow `--merge`/`daemon --merge` |
+| `prComments` | `false` | Post verdict + anchored findings as a GitHub PR review |
 | `daemonIntervalSec` | 120 | Daemon poll interval |
 | `workdir` | `null` | Subdirectory for test/fix commands (monorepos) |
 
@@ -120,9 +145,10 @@ HTTP error — the chain just moves on, and every attempt is logged in the repor
 
 ```
 ai-referee review [--pr N] [--base REF] [--uncommitted] [--fix] [--merge]
-                  [--skip-tests] [--format md|json|both] [--out FILE]
-ai-referee daemon [--interval SEC] [--once] [--merge] [--fix]
+                  [--comment] [--skip-tests] [--format md|json|both] [--out FILE]
+ai-referee daemon [--interval SEC] [--once] [--merge] [--comment] [--fix]
 ai-referee hook install
+ai-referee doctor
 ai-referee init
 ```
 
@@ -141,7 +167,8 @@ failed test suite is a rejection. Everything else is plumbing.
 
 ## Limits
 
-- Reviewer sees the diff plus a README excerpt — no deep symbol context yet.
+- Reviewer sees the diff plus a README excerpt and full file bodies under
+  `contextBudget` — no cross-file symbol resolution.
 - Reviewer/test commands run via `bash`; Windows is unsupported for now.
 - PR/daemon modes need `gh` CLI authenticated and a GitHub `origin` remote.
 - `--fix` runs once and only on local targets; it will not push to a PR branch.

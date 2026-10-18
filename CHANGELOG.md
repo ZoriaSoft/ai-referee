@@ -3,6 +3,33 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — round 2 (2026-10-18)
+
+### Added
+
+- `--comment` (and `prComments` config): posts the gate verdict as a GitHub
+  PR review via `gh api` — `APPROVE`/`REQUEST_CHANGES` event with findings
+  anchored to diff lines as inline comments; unanchorable findings land in
+  the review body. Posting failures never flip the verdict.
+- Diff-aware line anchoring: `parseDiff` now maps new-side (RIGHT) line
+  numbers (`FileDiff.rightLines`), so only lines GitHub actually accepts get
+  inline comments; ambiguous paths refuse to anchor.
+- `ai-referee doctor`: one-pass sanity check — repo, config, test command
+  workdir, reviewer binaries/API keys, `gh` auth. Exit 0 healthy, 2 problems.
+- Chunk-level parallelism: `reviewConcurrency` (default 2, max 8) reviews
+  chunks in a worker pool with deterministic result order.
+- Context enrichment: `contextBudget` (default 40k chars) appends post-change
+  file bodies to prompts; `0` disables.
+- Token usage: `api` reviewers capture `usage` into per-attempt logs and the
+  summed `stats.tokens` in reports.
+- `daemon --comment` posts each verdict to its PR.
+
+### Changed
+
+- `cliCommandBinary` now returns null for compound commands containing shell
+  metacharacters — a missing binary behind a pipe/redirect is no longer
+  masked by the precheck.
+
 ## [Unreleased] — round 1 (2026-10-18)
 
 ### Added

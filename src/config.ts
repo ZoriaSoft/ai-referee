@@ -42,9 +42,15 @@ export interface Config {
   fixerTimeoutMs: number;
   /** Merge via `gh pr merge` when PR review approves. Default false. */
   autoMerge: boolean;
+  /** Post the verdict + findings as a GitHub review on PR targets. Default false. */
+  prComments: boolean;
+  /** Chunks reviewed concurrently. Default 2. */
+  reviewConcurrency: number;
+  /** Max chars of changed-file bodies appended to prompts for context. 0 disables. */
+  contextBudget: number;
   /** Seconds between daemon polls. */
   daemonIntervalSec: number;
-  /** Working directory for fix/test commands relative to repo root. */
+  /** Working directory for test/fix commands relative to repo root. */
   workdir: string | null;
 }
 
@@ -65,6 +71,9 @@ export const DEFAULT_CONFIG: Config = {
   fixerCommand: null,
   fixerTimeoutMs: 10 * 60 * 1000,
   autoMerge: false,
+  prComments: false,
+  reviewConcurrency: 2,
+  contextBudget: 40_000,
   daemonIntervalSec: 120,
   workdir: null,
 };
@@ -113,6 +122,9 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
   if ("fixerCommand" in raw) cfg.fixerCommand = raw.fixerCommand === null ? null : str(raw.fixerCommand, "fixerCommand", path);
   if ("fixerTimeoutMs" in raw) cfg.fixerTimeoutMs = num(raw.fixerTimeoutMs, "fixerTimeoutMs", path);
   if ("autoMerge" in raw) cfg.autoMerge = raw.autoMerge === true;
+  if ("prComments" in raw) cfg.prComments = raw.prComments === true;
+  if ("reviewConcurrency" in raw) cfg.reviewConcurrency = num(raw.reviewConcurrency, "reviewConcurrency", path);
+  if ("contextBudget" in raw) cfg.contextBudget = num(raw.contextBudget, "contextBudget", path);
   if ("daemonIntervalSec" in raw) cfg.daemonIntervalSec = num(raw.daemonIntervalSec, "daemonIntervalSec", path);
   if ("workdir" in raw) cfg.workdir = raw.workdir === null ? null : str(raw.workdir, "workdir", path);
   return cfg;
@@ -157,6 +169,12 @@ function validateConfig(cfg: Config, path: string): void {
   }
   if (cfg.chunkBudget < 4_000) {
     throw new ConfigError(`${path}: "chunkBudget" must be at least 4000 chars`);
+  }
+  if (cfg.contextBudget < 0) {
+    throw new ConfigError(`${path}: "contextBudget" must be >= 0`);
+  }
+  if (!Number.isInteger(cfg.reviewConcurrency) || cfg.reviewConcurrency < 1 || cfg.reviewConcurrency > 8) {
+    throw new ConfigError(`${path}: "reviewConcurrency" must be an integer between 1 and 8`);
   }
 }
 

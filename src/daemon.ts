@@ -13,6 +13,8 @@ export interface DaemonOptions {
   /** Run one poll cycle and exit — for smoke tests. */
   once: boolean;
   autoMerge?: boolean;
+  /** Post each verdict as a GitHub PR review (needs `gh api` access). */
+  postComments?: boolean;
   fix?: boolean;
   /** Written under <cwd>/.ai-referee/daemon-state.json */
   statePath?: string;
@@ -57,9 +59,13 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
           cwd,
           pr: pr.number,
           autoMerge: opts.autoMerge === true && config.autoMerge,
+          postComments: opts.postComments === true,
           fix: opts.fix === true,
         });
-        log(`#${pr.number} → ${report.verdict} (${report.findings.length} findings)`);
+        log(
+          `#${pr.number} → ${report.verdict} (${report.findings.length} findings)` +
+            (report.comments.requested ? `; review post: ${report.comments.detail ?? (report.comments.posted ? "ok" : "?")}` : ""),
+        );
         await writeReport(cwd, pr.number, report);
         state.reviewed[String(pr.number)] = {
           sha: pr.headRefOid,

@@ -1,7 +1,7 @@
-import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import { run } from "../src/exec.js";
 import { runReview } from "../src/review.js";
@@ -36,6 +36,9 @@ function cfg(overrides: Partial<Config>): Config {
     fixerCommand: null,
     fixerTimeoutMs: 10_000,
     autoMerge: false,
+    prComments: false,
+    reviewConcurrency: 1,
+    contextBudget: 40_000,
     daemonIntervalSec: 120,
     workdir: null,
     ...overrides,
@@ -177,6 +180,177 @@ describe("runReview pipeline", () => {
       base: "main",
     });
     expect(withUncommitted.stats.insertions).toBeGreaterThan(without.stats.insertions);
+  });
+
+  it("reviews chunks in parallel when reviewConcurrency > 1", async () => {
+    await writeFile(join(dir, "b.ts"), `export const b = 1;\n${"// pad\n".repeat(80)}`);
+    await writeFile(join(dir, "c.ts"), `export const c = 1;\n${"// pad\n".repeat(80)}`);
+    await sh("git add -A && git commit -qm more");
+    const pool = join(dir, "pool");
+    const marker = join(dir, "saw-parallel");
+    const script =
+      `touch '${pool}.'$$; sleep 0.3; ` +
+      `[ $(ls '${pool}.'* 2>/dev/null | wc -l) -ge 2 ] && touch '${marker}'; rm -f '${pool}.'$$; ` +
+      `printf '%s' '${APPROVE}'`;
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        chunkBudget: 400,
+        reviewConcurrency: 2,
+        reviewers: [{ name: "slow", type: "cli", command: script }],
+      }),
+      base: "main",
+    });
+    expect(report.stats.chunks).toBeGreaterThanOrEqual(2);
+    expect(report.chunks.map((c) => c.index)).toEqual(report.chunks.map((_, i) => i));
+    const saw = await run(`test -f '${marker}'`, { cwd: dir });
+    expect(saw.exitCode).toBe(0);
+  });
+
+  it("keeps results sequential at concurrency 1", async () => {
+    await writeFile(join(dir, "b.ts"), `export const b = 1;\n${"// pad\n".repeat(80)}`);
+    await writeFile(join(dir, "c.ts"), `export const c = 1;\n${"// pad\n".repeat(80)}`);
+    await sh("git add -A && git commit -qm more");
+    const pool = join(dir, "poolseq");
+    const marker = join(dir, "saw-parallel-seq");
+    const script =
+      `touch '${pool}.'$$; sleep 0.3; ` +
+      `[ $(ls '${pool}.'* 2>/dev/null | wc -l) -ge 2 ] && touch '${marker}'; rm -f '${pool}.'$$; ` +
+      `printf '%s' '${APPROVE}'`;
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        chunkBudget: 400,
+        reviewConcurrency: 1,
+        reviewers: [{ name: "slow", type: "cli", command: script }],
+      }),
+      base: "main",
+    });
+    expect(report.stats.chunks).toBeGreaterThanOrEqual(2);
+    const saw = await run(`test -f '${marker}'`, { cwd: dir });
+    expect(saw.exitCode).not.toBe(0);
+  });
+
+  it("injects full file bodies into the prompt within contextBudget", async () => {
+    const capture = join(dir, "prompt.txt");
+    const script = `cat > '${capture}'; printf '%s' '${APPROVE}'`;
+    await runReview({
+      cwd: dir,
+      config: cfg({ reviewers: [{ name: "spy", type: "cli", command: script }] }),
+      base: "main",
+    });
+    const prompt = await readFile(capture, "utf8");
+    expect(prompt).toContain("Full file contents after the change");
+    expect(prompt).toContain("export const x = 1;");
+  });
+
+  it("omits file bodies when contextBudget is 0", async () => {
+    const capture = join(dir, "prompt0.txt");
+    const script = `cat > '${capture}'; printf '%s' '${APPROVE}'`;
+    await runReview({
+      cwd: dir,
+      config: cfg({ contextBudget: 0, reviewers: [{ name: "spy", type: "cli", command: script }] }),
+      base: "main",
+    });
+    const prompt = await readFile(capture, "utf8");
+    expect(prompt).not.toContain("Full file contents after the change");
+  });
+
+  it("sums api token usage into stats.tokens", async () => {
+    const body = {
+      choices: [{ message: { content: APPROVE } }],
+      usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({ reviewers: [{ name: "api", type: "api", url: "https://api.test/x" }] }),
+      base: "main",
+    });
+    vi.unstubAllGlobals();
+    expect(report.stats.tokens).toEqual({ prompt: 100, completion: 10, total: 110 });
+  });
+
+  it("posts a REQUEST_CHANGES review with anchored comments for a PR", async () => {
+    // Build a fake "origin" remote that serves refs/pull/7/head.
+    const remote = join(dir, "remote.git");
+    await sh(`git init -q --bare '${remote}'`);
+    // Push objects first — update-ref refuses SHAs the remote doesn't have.
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/7/head ${featSha}`);
+
+    // Fake gh: answers `pr view` and captures `api` stdin + argv.
+    const fakebin = join(dir, "fakebin");
+    await mkdir(fakebin);
+    const capStdin = join(dir, "gh-stdin.json");
+    const capArgs = join(dir, "gh-args.txt");
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then cat > '${capStdin}'; echo "$@" > '${capArgs}'; echo '{}'; exit 0; fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 7,
+        postComments: true,
+        config: cfg({ reviewers: [{ name: "strict", type: "cli", command: echo(REJECT) }] }),
+      });
+      expect(report.comments.requested).toBe(true);
+      expect(report.comments.posted).toBe(true);
+      expect(report.verdict).toBe("REJECT");
+
+      const payload = JSON.parse(await readFile(capStdin, "utf8"));
+      expect(payload.event).toBe("REQUEST_CHANGES");
+      expect(payload.commit_id).toBe(featSha);
+      expect(payload.comments).toEqual([
+        { path: "a.ts", line: 2, side: "RIGHT", body: expect.stringContaining("MAJOR") },
+      ]);
+      const args = await readFile(capArgs, "utf8");
+      expect(args).toContain("pulls/7/reviews");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("does not flip the verdict when comment posting fails", async () => {
+    const remote = join(dir, "remote2.git");
+    await sh(`git init -q --bare '${remote}'`);
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/8/head ${featSha}`);
+
+    const fakebin = join(dir, "fakebin2");
+    await mkdir(fakebin);
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then echo 'Forbidden' >&2; exit 1; fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 8,
+        postComments: true,
+        config: cfg({ reviewers: [{ name: "ok", type: "cli", command: echo(APPROVE) }] }),
+      });
+      expect(report.verdict).toBe("APPROVE");
+      expect(report.comments.posted).toBe(false);
+      expect(report.comments.detail).toContain("post failed");
+    } finally {
+      process.env.PATH = savedPath;
+    }
   });
 
 });

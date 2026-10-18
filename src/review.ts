@@ -2,12 +2,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "./config.js";
-import { chunkDiff, globMatch, parseDiff } from "./diff.js";
+import { chunkDiff, globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
 import { run } from "./exec.js";
 import * as git from "./git.js";
+import { buildPrReview } from "./comments.js";
 import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
-import type { ChunkResult, Finding, GateReport, TestResult } from "./types.js";
+import type { ChunkResult, Finding, GateReport, TestResult, TokenUsage } from "./types.js";
 import { parseVerdict, VerdictParseError } from "./verdict.js";
 
 export interface ReviewTarget {
@@ -36,6 +37,8 @@ export interface ReviewOptions {
   fix?: boolean;
   /** Merge via `gh pr merge` on APPROVE (PR target only). */
   autoMerge?: boolean;
+  /** Post the verdict + findings as a GitHub review on the PR (PR target only). */
+  postComments?: boolean;
   /** Max parse retries per chunk after the first attempt. */
   maxParseRetries?: number;
 }
@@ -123,12 +126,14 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   const repoNote = await repoNoteSnippet(await readOptional(join(wt, "README.md")));
 
   const reviewed = await reviewChunks({
-    chunks: chunks.map((c) => ({ index: c.index, files: c.files.map((f) => f.path), patch: c.patch, truncated: c.truncated })),
+    chunks,
     reviewers,
     target,
     repoNote,
     worktree: wt,
     maxParseRetries: opts.maxParseRetries ?? 1,
+    concurrency: config.reviewConcurrency,
+    contextBudget: config.contextBudget,
     round: 1,
   });
 
@@ -151,12 +156,14 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     const newFiles = parseDiff(newDiff).filter((f) => !excluded.has(f.path) && !f.isBinary);
     const newChunks = chunkDiff(newFiles, config.chunkBudget);
     const reReviewed = await reviewChunks({
-      chunks: newChunks.map((c) => ({ index: c.index, files: c.files.map((f) => f.path), patch: c.patch, truncated: c.truncated })),
+      chunks: newChunks,
       reviewers,
       target,
       repoNote,
       worktree: wt,
       maxParseRetries: opts.maxParseRetries ?? 1,
+      concurrency: config.reviewConcurrency,
+      contextBudget: config.contextBudget,
       round: 2,
     });
     const reTests = await runTests(config, wt, false);
@@ -190,6 +197,10 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       insertions: totals.insertions,
       deletions: totals.deletions,
       chunks: reviewed.length,
+      ...(() => {
+        const tokens = totalTokens(reviewed);
+        return tokens ? { tokens } : {};
+      })(),
     },
     tests,
     verdict,
@@ -198,7 +209,20 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     chunks: reviewed,
     reasons,
     fix,
+    comments: { requested: opts.postComments === true && target.pr !== undefined, posted: false, detail: null },
   };
+
+  if (report.comments.requested && target.pr !== undefined) {
+    try {
+      const payload = buildPrReview(report, allFiles);
+      await git.ghPostReview(opts.cwd, target.pr, payload);
+      report.comments.posted = true;
+      report.comments.detail = `posted ${payload.event} with ${payload.comments.length} inline comment(s)`;
+    } catch (err) {
+      // Comment posting is best-effort: the gate verdict stands on its own.
+      report.comments.detail = `post failed: ${(err as Error).message}`;
+    }
+  }
 
   if (opts.autoMerge && verdict === "APPROVE" && target.pr !== undefined) {
     try {
@@ -241,21 +265,23 @@ async function runTests(config: Config, worktree: string, skip: boolean): Promis
 }
 
 async function reviewChunks(opts: {
-  chunks: { index: number; files: string[]; patch: string; truncated: boolean }[];
+  chunks: DiffChunk[];
   reviewers: Reviewer[];
   target: ReviewTarget;
   repoNote: string | null;
   worktree: string;
   maxParseRetries: number;
+  concurrency: number;
+  contextBudget: number;
   round: number;
 }): Promise<ChunkResult[]> {
-  const { chunks, reviewers, target, repoNote, worktree, maxParseRetries, round } = opts;
-  const results: ChunkResult[] = [];
+  const { chunks, reviewers, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, round } = opts;
 
-  for (const chunk of chunks) {
+  /** Reviews one chunk through the fallback chain with parse retries. */
+  const reviewOne = async (chunk: DiffChunk): Promise<ChunkResult> => {
     const result: ChunkResult = {
       index: chunk.index,
-      files: chunk.files,
+      files: chunk.files.map((f) => f.path),
       parsed: null,
       failedReason: null,
       attempts: [],
@@ -264,22 +290,24 @@ async function reviewChunks(opts: {
 
     if (reviewers.length === 0) {
       result.failedReason = "no reviewers configured";
-      results.push(result);
-      continue;
+      return result;
     }
 
+    const { files: contextFiles, skipped: contextSkipped } = await gatherContext(chunk.files, worktree, contextBudget);
     let prompt = buildReviewPrompt({
       index: chunk.index,
-      files: chunk.files,
+      files: result.files,
       patch: chunk.patch,
       truncated: chunk.truncated,
       totalChunks: chunks.length,
       base: target.base,
       head: target.head,
       repoNote,
+      contextFiles,
+      contextSkipped,
     });
 
-    for (let round = 0; round <= maxParseRetries; round++) {
+    for (let attempt = 0; attempt <= maxParseRetries; attempt++) {
       const chain = await invokeChain(reviewers, prompt, worktree);
       result.attempts.push(...chain.attempts);
       if (!chain.response) {
@@ -292,16 +320,72 @@ async function reviewChunks(opts: {
         break;
       } catch (err) {
         const why = err instanceof VerdictParseError ? err.message : String(err);
-        if (round === maxParseRetries) {
-          result.failedReason = `unparseable verdict after ${round + 1} attempt(s): ${why}`;
+        if (attempt === maxParseRetries) {
+          result.failedReason = `unparseable verdict after ${attempt + 1} attempt(s): ${why}`;
         } else {
           prompt = buildParseRetryPrompt(why);
         }
       }
     }
-    results.push(result);
-  }
+    return result;
+  };
+
+  // Bounded worker pool: chunks run `concurrency` at a time; results keep
+  // diff order regardless of completion order.
+  const results = new Array<ChunkResult>(chunks.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < chunks.length) {
+      const i = next++;
+      results[i] = await reviewOne(chunks[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), chunks.length || 1) }, worker));
   return results;
+}
+
+/**
+ * Reads the post-change body of each changed file for prompt context until
+ * `budget` chars run out. Deleted/binary files and unreadable paths skip
+ * silently — the diff alone still reviews fine.
+ */
+async function gatherContext(
+  files: FileDiff[],
+  worktree: string,
+  budget: number,
+): Promise<{ files: { path: string; content: string }[]; skipped: string[] }> {
+  const out: { path: string; content: string }[] = [];
+  const skipped: string[] = [];
+  if (budget <= 0) return { files: out, skipped };
+  let left = budget;
+  for (const f of files) {
+    if (f.isDeleted || f.isBinary) continue;
+    const content = await readOptional(join(worktree, f.path));
+    if (content === null) continue;
+    const text = content.length <= left ? content : content.slice(0, left) + "\n[... truncated for context budget ...]";
+    out.push({ path: f.path, content: text });
+    left -= text.length;
+    if (left <= 0) break;
+  }
+  const seen = new Set(out.map((f) => f.path));
+  for (const f of files) {
+    if (!f.isDeleted && !f.isBinary && !seen.has(f.path)) skipped.push(f.path);
+  }
+  return { files: out, skipped };
+}
+
+/** Summed token usage across all attempts; null when nothing reported it. */
+function totalTokens(chunks: ChunkResult[]): TokenUsage | null {
+  let acc: TokenUsage | null = null;
+  for (const c of chunks) {
+    for (const a of c.attempts) {
+      if (!a.tokens) continue;
+      acc = acc
+        ? { prompt: acc.prompt + a.tokens.prompt, completion: acc.completion + a.tokens.completion, total: acc.total + a.tokens.total }
+        : { ...a.tokens };
+    }
+  }
+  return acc;
 }
 
 /** Drops exact duplicate findings across chunks (same file, line, message). */
