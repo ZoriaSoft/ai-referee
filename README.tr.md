@@ -78,6 +78,9 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
   `src/auth/**` güçlü bir güvenlik modeline, geri kalanı ucuz varsayılana.
   Yönlendirilen dosyalar ayrı parçalarda incelenir; kendi hakemleri cevap
   vermezse varsayılan zincire sessizce düşmezler → REJECT (fail-closed).
+  Route'a `"fixer"` ile kendi düzeltici komutunu verebilirsin: o route'a
+  düşen bulgular yalnız ona gider; `"fixer": null` dosyaları düzeltmeden
+  muaf tutar. Route'suz dosyalar genel `fixerCommand`'ı kullanır.
 
 ## Mevcut araçlardan farkı
 
@@ -90,7 +93,9 @@ GitHub Actions gerekmez.
 
 - Reviewer diff + README özeti + `contextBudget` kadar tam dosya içeriği görür
   (dosyalar arası sembol çözümlemesi yok).
-- Reviewer/test komutları `bash` ister; Windows desteklenmez.
+- Komutlar POSIX'te `bash` ile çalışır; Windows'ta `cmd.exe` devreye girer —
+  best-effort destek. Reviewer komutlarında stdin veya `{prompt_file}` tercih
+  et; satır içi `{prompt}` cmd'de kırılgandır (`%VAR%` genişler).
 - PR/daemon modları `gh` CLI ve GitHub `origin` ister.
 - `--fix` tek tur ve yalnız yerel hedeflerde.
 

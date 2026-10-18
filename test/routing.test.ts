@@ -61,6 +61,20 @@ describe("planForFile", () => {
     const anon: RouteConfig = { match: ["secrets/**"], reviewers: ["sec-model"] };
     expect(planForFile([anon], "secrets/keys.ts", "strict").route).toBe("secrets/**");
   });
+
+  it("resolves the route fixer: string override, null opt-out, absent inherits", () => {
+    const custom: RouteConfig = { ...sec, fixer: "auth-fixer --apply" };
+    const blocked: RouteConfig = { match: ["docs/**"], reviewers: ["sec-model"], fixer: null };
+    expect(planForFile([custom], "src/auth/login.ts", "strict").fixer).toBe("auth-fixer --apply");
+    expect(planForFile([blocked], "docs/readme.md", "strict").fixer).toBeNull();
+    // Absent fixer stays absent — the global fixerCommand decides at fix time.
+    expect(planForFile([sec], "src/auth/login.ts", "strict").fixer).toBeUndefined();
+    expect(planForFile([], "src/app.ts", "strict").fixer).toBeUndefined();
+    // First route mentioning a fixer wins when several match.
+    const second: RouteConfig = { ...sec, fixer: "other-fixer" };
+    expect(planForFile([custom, second], "src/auth/login.ts", "strict").fixer).toBe("auth-fixer --apply");
+    expect(planForFile([sec, second], "src/auth/login.ts", "strict").fixer).toBe("other-fixer");
+  });
 });
 
 describe("chunkFilesByRoute", () => {

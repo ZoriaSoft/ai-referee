@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 import { CONFIG_FILENAME, loadConfig, type Config } from "./config.js";
 import { runDaemon } from "./daemon.js";
 import { runDoctor } from "./doctor.js";
@@ -31,6 +32,7 @@ REVIEW OPTIONS
   --comment           post the verdict + findings as a GitHub PR review (PR only)
   --status            post a commit status (context "ai-referee") on the PR head (PR only)
   --confirm           verify each REJECT with a second referee before blocking
+  --skip-tests        skip the test step for this run
   --strict            strict profile: full review (default)
   --light             light profile: only merge-blocking problems may reject
   --format <fmt>      markdown | json | both   (default: markdown on a TTY, json when piped)
@@ -115,11 +117,15 @@ interface CliArgs {
   rest: string[];
 }
 
-function splitCommand(argv: string[]): CliArgs {
+export function splitCommand(argv: string[]): CliArgs {
   const known = new Set(["review", "daemon", "hook", "init", "help", "doctor"]);
   const first = argv.find((a) => !a.startsWith("-"));
   if (first && known.has(first)) {
-    return { command: first, rest: argv.filter((a) => a !== first) };
+    // Splice only the positional occurrence — a later arg may legitimately
+    // equal the command word (e.g. `--out review`), and filter() would eat it.
+    const rest = [...argv];
+    rest.splice(rest.indexOf(first), 1);
+    return { command: first, rest };
   }
   if (argv.includes("--version") || argv.includes("-v")) return { command: "version", rest: [] };
   return { command: argv.length === 0 || argv.includes("--help") || argv.includes("-h") ? "help" : "review", rest: argv };
@@ -220,6 +226,7 @@ async function cmdReview(rest: string[]): Promise<number> {
       postComments: (v.comment || config.prComments) && pr !== undefined,
       postStatus: (v.status || config.commitStatus) && pr !== undefined,
       profile: profileFromFlags(v) ?? undefined,
+      confirmRejections: v.confirm || undefined,
     });
   } catch (err) {
     if (err instanceof ReviewError) {
@@ -248,6 +255,17 @@ async function cmdDaemon(rest: string[]): Promise<number> {
   const { values: v } = parseCommon(rest);
   const cwd = process.cwd();
   const config = await loadOrDie(cwd, v.config);
+  if (v.interval !== undefined && !Number.isFinite(Number.parseInt(v.interval, 10))) {
+    process.stderr.write(`invalid --interval value: ${v.interval}\n`);
+    return 2;
+  }
+  if (v.concurrency !== undefined) {
+    const n = Number.parseInt(v.concurrency, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 8) {
+      process.stderr.write(`invalid --concurrency value: ${v.concurrency} (1–8)\n`);
+      return 2;
+    }
+  }
   return runDaemon({
     cwd,
     config,
@@ -257,6 +275,7 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     postComments: v.comment || config.prComments,
     postStatus: v.status || config.commitStatus,
     confirmRejections: v.confirm || undefined,
+    fix: v.fix,
     concurrency: v.concurrency ? Number.parseInt(v.concurrency, 10) : undefined,
     profile: profileFromFlags(v) ?? undefined,
   });
@@ -298,10 +317,13 @@ async function cmdInit(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write(`ai-referee: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(2);
-  },
-);
+// Entry guard: importing this module (tests) must not run main().
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write(`ai-referee: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(2);
+    },
+  );
+}

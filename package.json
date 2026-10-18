@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "description": "Local, self-hosted merge gate: runs your tests, sends the diff to any agent CLI or OpenAI-compatible API, and blocks the merge on REJECT. No referee, no merge.",
   "license": "MIT",
+  "author": "ZoriaSoft",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZoriaSoft/ai-referee.git"
+  },
+  "keywords": [
+    "ai",
+    "code-review",
+    "llm",
+    "merge-gate",
+    "pull-request",
+    "pre-push",
+    "self-hosted"
+  ],
   "type": "module",
   "bin": {
     "ai-referee": "dist/cli.js"

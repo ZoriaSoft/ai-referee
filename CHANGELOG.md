@@ -3,6 +3,40 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — round 8 (2026-10-18)
+
+### Added
+
+- Route-aware fixer: a route may carry `"fixer"` — a command that receives
+  only the findings whose files matched that route (labelled in `fix.detail`),
+  or `null` to opt those files out of fixing entirely. Unrouted findings keep
+  using the global `fixerCommand`; a fix round now runs when any fixer
+  resolves (route-only fixers count), and each distinct command runs once
+  with its own finding subset. `doctor` reports each route's fixer binary.
+- Best-effort Windows support: commands run through `cmd.exe /d /s /c`
+  instead of `bash -c`, `where` replaces `command -v` for binary preflight,
+  and escaping follows `CommandLineToArgvW` rules. POSIX-only shell syntax
+  (`2>/dev/null`) was removed from git helpers. Inline `{prompt}` remains
+  fragile under cmd — prefer stdin or `{prompt_file}` on Windows.
+- `--skip-tests` is now listed in `ai-referee --help`.
+
+### Fixed
+
+- `review --confirm` was parsed but never forwarded — the flag had no effect.
+- `daemon --fix` was parsed but never forwarded.
+- `daemon --interval`/`--concurrency` non-numeric input was silently accepted
+  (NaN interval would re-poll in a hot loop); both are now validated.
+- `splitCommand` removed every argument equal to the command word, so
+  `ai-referee review --out review` lost its `--out` value; only the
+  positional occurrence is spliced now.
+
+### Changed
+
+- `package.json` gains `repository`, `keywords` and `author` metadata.
+- `src/cli.ts` runs `main()` only when executed directly — the module is
+  now importable in tests.
+
+
 ## [Unreleased] — round 7 (2026-10-18)
 
 ### Added

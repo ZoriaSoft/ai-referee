@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReviewerConfig } from "./config.js";
-import { run, shellEscape } from "./exec.js";
+import { run, shellEscape, which } from "./exec.js";
 import type { ReviewerAttempt, TokenUsage } from "./types.js";
 
 export interface ReviewerResponse {
@@ -21,8 +21,8 @@ export interface Reviewer {
 
 /**
  * First non-assignment word of a cli reviewer command — the binary to
- * preflight. Compound commands (env prefixes, pipes…) yield null; bash's
- * own 127 then reports missing binaries at invoke time.
+ * preflight. Compound commands (env prefixes, pipes…) yield null; the
+ * shell's own 127 then reports missing binaries at invoke time.
  */
 export function cliCommandBinary(command: string): string | null {
   // Shell metacharacters mean the first word is not the whole story —
@@ -55,8 +55,8 @@ function cliReviewer(cfg: ReviewerConfig): Reviewer {
       const started = Date.now();
       // A missing binary is the most common "unavailable" cause; check cheaply.
       if (bin !== null) {
-        const found = await run(`command -v -- ${shellEscape(bin)}`, { cwd, timeoutMs: 10_000 });
-        if (found.exitCode !== 0) {
+        const found = await which(bin, cwd);
+        if (found === null) {
           return { ok: false, output: "", detail: `binary not found: ${bin}`, durationMs: 0 };
         }
       }

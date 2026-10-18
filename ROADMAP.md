@@ -116,19 +116,41 @@ Owner decides.
       post failures land in `report.status.detail`, never flip the verdict;
       final state lands after auto-merge so a failed merge reads `failure`.
 
+## Done — round 8
+
+- [x] **Route-aware fixer**: `routes[].fixer` — a per-route fix command for
+      matching files (first route's fixer wins; `null` opts files out),
+      falling back to the global `fixerCommand`. Findings are partitioned by
+      resolved fixer; each command runs once with its own subset and is
+      labelled in `fix.detail`. Fix rounds now fire when *any* fixer
+      resolves, so a route-only fixer works without a global one.
+- [x] **Best-effort Windows support**: `cmd.exe /d /s /c` shell fallback,
+      `where` for binary lookup, `CommandLineToArgvW`-style quoting; POSIX
+      `2>/dev/null` and `command -v` idioms removed. Inline `{prompt}` stays
+      fragile under cmd — docs steer to stdin/`{prompt_file}`.
+- [x] **CLI flag fixes**: dead `--confirm` (review) and `--fix` (daemon) now
+      forwarded; `--interval`/`--concurrency` validated; `splitCommand`
+      no longer eats flag values equal to the command word; `--skip-tests`
+      documented in `--help`; cli module importable without running main.
+
 ## Next (priority order)
 
-- [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
-      to a route-matched fixer instead. (Deferred round 5 — few real setups
-      need a second fixer; confirmation + file comments were higher value.)
-- [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
+- [ ] **Windows end-to-end verification**: the cmd.exe fallback is unit-tested
+      but never exercised on a real Windows box — first public release should
+      get a manual smoke pass before claiming full support.
+
+
+Ideas surfaced during rounds, not scheduled: `--staged` review target,
+`--stale <days>` daemon flag to re-review old approved heads, JSON schema
+export for `.ai-referee.json`, review caching by chunk hash.
 
 
 ## Known limits
 
 - Reviewer sees diff + README excerpt + file bodies under `contextBudget`;
   no cross-file symbol resolution.
-- `cli` reviewers require bash (POSIX environments; Windows unsupported).
+- `cli` reviewer/test/fixer commands run via `bash` on POSIX and `cmd.exe` on
+  Windows (best-effort; `%VAR%` expands inside quoted args under cmd).
 - Daemon/PR modes require `gh` CLI + GitHub remote; plain-git hosting has no
   PR mode (local `--base` diffs still work everywhere).
 - One fix round by design; no iterative fix loops.

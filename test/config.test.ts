@@ -118,6 +118,30 @@ describe("loadConfig", () => {
     expect(config.routes[0]!.profile).toBe("strict");
   });
 
+  it("parses a route fixer as string or null", async () => {
+    const cwd = await writeCfg(`{
+      "fixerCommand": "global-fixer",
+      "reviewers": [{"name":"sec","type":"cli","command":"cat"}],
+      "routes": [
+        { "match": ["src/auth/**"], "reviewers": ["sec"], "fixer": "auth-fixer --apply" },
+        { "match": ["docs/**"], "reviewers": ["sec"], "fixer": null },
+        { "match": ["src/**"], "reviewers": ["sec"] }
+      ]
+    }`);
+    const { config } = await loadConfig(cwd);
+    expect(config.routes[0]!.fixer).toBe("auth-fixer --apply");
+    expect(config.routes[1]!.fixer).toBeNull();
+    expect(config.routes[2]!.fixer).toBeUndefined();
+  });
+
+  it("rejects a non-string route fixer", async () => {
+    const cwd = await writeCfg(`{
+      "reviewers": [{"name":"sec","type":"cli","command":"cat"}],
+      "routes": [{ "match": ["src/**"], "reviewers": ["sec"], "fixer": 42 }]
+    }`);
+    await expect(loadConfig(cwd)).rejects.toThrow(ConfigError);
+  });
+
   it("rejects a bad profile value", async () => {
     const cwd = await writeCfg(`{"profile": "paranoid"}`);
     await expect(loadConfig(cwd)).rejects.toThrow(/"profile" must be "strict" or "light"/);

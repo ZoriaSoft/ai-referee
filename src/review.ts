@@ -8,7 +8,7 @@ import * as git from "./git.js";
 import { buildPrReviewSet, REVIEW_MARKER } from "./comments.js";
 import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
-import { chunkFilesByRoute, type ReviewPlan } from "./routing.js";
+import { chunkFilesByRoute, planForFile, type ReviewPlan } from "./routing.js";
 import type { ChunkResult, Finding, GateReport, ReviewProfile, TestResult, TokenUsage } from "./types.js";
 import { parseVerdict, VerdictParseError } from "./verdict.js";
 
@@ -176,16 +176,30 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   let { verdict, reasons, warnings } = decideVerdict(reviewed, tests, config.reviewers.length === 0);
 
   const fix = { requested: opts.fix === true, ran: false, detail: null as string | null };
+  const fixGroups = partitionFindingsByFixer(findings, config, runProfile);
+  const anyFixable = fixGroups.some(([cmd]) => cmd !== null);
   if (
     opts.fix === true &&
     verdict === "REJECT" &&
-    config.fixerCommand &&
+    anyFixable &&
     target.kind === "local" &&
     reviewed.every((c) => c.failedReason === null) &&
     tests.passed
   ) {
     fix.ran = true;
-    fix.detail = await runFixer(config.fixerCommand, config.fixerTimeoutMs, wt, findings, target);
+    // Route-aware: each finding goes to the fixer its file's route resolves;
+    // no route match inherits the global fixerCommand, an explicit route
+    // `fixer: null` (or no fixer at all) leaves the finding unfixed.
+    const details: string[] = [];
+    for (const [command, group, label] of fixGroups) {
+      if (command === null) {
+        if (group.length > 0) details.push(`${group.length} finding(s) without a fixer skipped${label ? ` (${label})` : ""}`);
+        continue;
+      }
+      const res = await runFixer(command, config.fixerTimeoutMs, wt, group, target);
+      details.push(label ? `[${label}] ${res}` : res);
+    }
+    fix.detail = details.join(" | ");
     // Re-review the modified worktree once.
     const newDiff = await git.diffAgainst(wt, target.base, true);
     const newFiles = parseDiff(newDiff).filter((f) => !excluded.has(f.path) && !f.isBinary);
@@ -216,7 +230,6 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     tests.passed = reTests.passed;
     tests.outputTail = reTests.outputTail;
   }
-
   const totals = allFiles.reduce(
     (acc, f) => ({ insertions: acc.insertions + f.insertions, deletions: acc.deletions + f.deletions }),
     { insertions: 0, deletions: 0 },
@@ -634,6 +647,33 @@ function summarize(chunks: ChunkResult[], verdict: "APPROVE" | "REJECT"): string
   const seen = new Set<string>();
   const unique = summaries.filter((s) => (seen.has(s) ? false : (seen.add(s), true)));
   return unique.join(" | ");
+}
+
+/**
+ * Groups findings by the fixer that should address them: a route match
+ * resolves that route's fixer (string) or opts out (null); unmatched files
+ * — and findings without a file — use the global fixerCommand.
+ * Returns [command|null, findings, routeLabel|null] preserving file order.
+ */
+export function partitionFindingsByFixer(
+  findings: Finding[],
+  config: Config,
+  runProfile: ReviewProfile,
+): [command: string | null, findings: Finding[], routeLabel: string | null][] {
+  const groups = new Map<string | null, { findings: Finding[]; label: string | null }>();
+  for (const f of findings) {
+    const plan = f.file ? planForFile(config.routes, f.file, runProfile) : null;
+    const command = plan !== null && plan.fixer !== undefined ? plan.fixer : config.fixerCommand;
+    const label = plan?.route ?? null;
+    const existing = groups.get(command);
+    if (existing) {
+      existing.findings.push(f);
+      if (!existing.label) existing.label = label;
+    } else {
+      groups.set(command, { findings: [f], label });
+    }
+  }
+  return [...groups.entries()].map(([command, g]) => [command, g.findings, g.label]);
 }
 
 async function runFixer(

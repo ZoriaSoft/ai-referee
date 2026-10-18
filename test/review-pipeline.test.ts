@@ -169,6 +169,86 @@ describe("runReview pipeline", () => {
     expect(report.chunks.every((c) => c.round === 2)).toBe(true);
   });
 
+  it("routes findings to the route's own fixer, not the global one", async () => {
+    // A routed file so the finding's file lands inside the "security" route.
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/keys.ts"), "export const k = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+    const rejectAuth = REJECT.replace('"file":"a.ts"', '"file":"src/auth/keys.ts"');
+    const script = `f=${dir}/rfc; c=$(( $(cat $f 2>/dev/null || echo 0) + 1 )); echo $c > $f; if [ $c -eq 1 ]; then printf '%s' '${rejectAuth.replace(/'/g, "'\\''")}'; else printf '%s' '${APPROVE}'; fi`;
+    const report = await runReview({
+      cwd: dir,
+      fix: true,
+      config: cfg({
+        reviewers: [{ name: "r", type: "cli", command: script }],
+        fixerCommand: `echo global >> ${dir}/global-used`,
+        routes: [{
+          name: "security",
+          match: ["src/auth/**"],
+          reviewers: ["r"],
+          fixer: `echo route >> ${dir}/route-used`,
+        }],
+      }),
+      base: "main",
+    });
+    expect(report.fix.ran).toBe(true);
+    // Only the route fixer ran; the global fixer must not touch routed files.
+    expect((await run(`test -f ${dir}/route-used`, { cwd: dir })).exitCode).toBe(0);
+    expect((await run(`test -f ${dir}/global-used`, { cwd: dir })).exitCode).not.toBe(0);
+    expect(report.fix.detail).toContain("[security]");
+  });
+
+  it("skips findings a route opted out of with fixer: null", async () => {
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/keys.ts"), "export const k = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+    const rejectAuth = REJECT.replace('"file":"a.ts"', '"file":"src/auth/keys.ts"');
+    const script = `f=${dir}/nfc; c=$(( $(cat $f 2>/dev/null || echo 0) + 1 )); echo $c > $f; if [ $c -eq 1 ]; then printf '%s' '${rejectAuth.replace(/'/g, "'\\''")}'; else printf '%s' '${APPROVE}'; fi`;
+    const report = await runReview({
+      cwd: dir,
+      fix: true,
+      config: cfg({
+        reviewers: [{ name: "r", type: "cli", command: script }],
+        fixerCommand: `echo global >> ${dir}/global-used`,
+        routes: [{
+          name: "security",
+          match: ["src/auth/**"],
+          reviewers: ["r"],
+          fixer: null,
+        }],
+      }),
+      base: "main",
+    });
+    // fixer: null opts the file out — nothing fixable, so no fixer ran at all.
+    expect(report.fix.ran).toBe(false);
+    expect((await run(`test -f ${dir}/global-used`, { cwd: dir })).exitCode).not.toBe(0);
+  });
+
+  it("still fixes when only a route provides a fixer (no global fixerCommand)", async () => {
+    await mkdir(join(dir, "src/auth"), { recursive: true });
+    await writeFile(join(dir, "src/auth/keys.ts"), "export const k = 1;\n");
+    await sh("git add -A && git commit -qm auth");
+    const rejectAuth = REJECT.replace('"file":"a.ts"', '"file":"src/auth/keys.ts"');
+    const script = `f=${dir}/ofc; c=$(( $(cat $f 2>/dev/null || echo 0) + 1 )); echo $c > $f; if [ $c -eq 1 ]; then printf '%s' '${rejectAuth.replace(/'/g, "'\\''")}'; else printf '%s' '${APPROVE}'; fi`;
+    const report = await runReview({
+      cwd: dir,
+      fix: true,
+      config: cfg({
+        reviewers: [{ name: "r", type: "cli", command: script }],
+        fixerCommand: null,
+        routes: [{
+          name: "security",
+          match: ["src/auth/**"],
+          reviewers: ["r"],
+          fixer: `echo route >> ${dir}/route-used`,
+        }],
+      }),
+      base: "main",
+    });
+    expect(report.fix.ran).toBe(true);
+    expect((await run(`test -f ${dir}/route-used`, { cwd: dir })).exitCode).toBe(0);
+  });
+
   it("includes uncommitted changes when asked", async () => {
     // dirty a tracked file without committing
     await appendFile(join(dir, "a.ts"), "export const dirty = true;\n");

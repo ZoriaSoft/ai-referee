@@ -42,6 +42,8 @@ export interface RouteConfig {
   profile?: "strict" | "light";
   /** Extra review instructions injected into the prompt for matching files. */
   instructions?: string;
+  /** Fixer command for findings on matching files; null disables the fixer. Absent → the global `fixerCommand` applies. */
+  fixer?: string | null;
 }
 
 export interface Config {
@@ -227,6 +229,7 @@ function parseRoute(raw: unknown, where: string, path: string): RouteConfig {
     route.profile = r.profile;
   }
   if (r.instructions !== undefined) route.instructions = str(r.instructions, `${where}.instructions`, path);
+  if (r.fixer !== undefined) route.fixer = r.fixer === null ? null : str(r.fixer, `${where}.fixer`, path);
   return route;
 }
 

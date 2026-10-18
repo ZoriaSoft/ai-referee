@@ -11,6 +11,8 @@ export interface ReviewPlan {
   reviewerNames: string[];
   profile: ReviewProfile;
   instructions: string[];
+  /** Fixer command resolved for matching files. Presence marks an explicit route fixer: string overrides `fixerCommand`, null disables fixing for these files. Absent → global `fixerCommand` applies. */
+  fixer?: string | null;
   /** Matching route labels joined with "+", or null when no route matched. */
   route: string | null;
   /** Stable grouping key — files with identical plans chunk together. */
@@ -48,6 +50,12 @@ export function planForFile(routes: RouteConfig[], path: string, runProfile: Rev
     // First matching route wins the profile override; later routes' instructions still apply.
     profile: matched.find((r) => r.profile)?.profile ?? runProfile,
     instructions: matched.map((r) => r.instructions).filter((s): s is string => !!s),
+    // First route mentioning a fixer wins: a string overrides the global
+    // fixerCommand for these files, an explicit null opts them out.
+    ...(() => {
+      const fr = matched.find((r) => r.fixer !== undefined);
+      return fr !== undefined ? { fixer: fr.fixer } : {};
+    })(),
     route: label,
     key: `route:${label}:${names.join(",")}:${matched.find((r) => r.profile)?.profile ?? runProfile}`,
   };

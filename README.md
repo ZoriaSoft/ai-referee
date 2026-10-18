@@ -180,6 +180,12 @@ chain.
 A file matching several routes gets the union of their reviewers (route
 order), the first route's profile, and all their instructions.
 
+Routes can also carry their own fixer for `--fix`: `"fixer"` on a route is a
+command that receives only the findings whose files matched that route, and
+`"fixer": null` opts those files out of fixing entirely. Files without a
+route keep using the global `fixerCommand`; when no route sets a fixer, the
+global command alone can satisfy `--fix`.
+
 ## Second referee: rejection confirmation
 
 LLM judges sometimes reject on hallucinated findings. Set
@@ -250,6 +256,7 @@ When an `api` reviewer reports `usage`, token counts are summed into
 | `profile` | `"strict"` | Default prompt profile; `--light`/`--strict` override per run |
 | `daemonConcurrency` | 1 | PRs the daemon reviews at once (1–8); `--concurrency` per run |
 | `routes` | `[]` | Per-path reviewer routing (see above) |
+| `routes[].fixer` | inherit | Per-route fixer command for `--fix`; `null` opts matching files out |
 
 ## Commands
 
@@ -281,7 +288,10 @@ failed test suite is a rejection. Everything else is plumbing.
 
 - Reviewer sees the diff plus a README excerpt and full file bodies under
   `contextBudget` — no cross-file symbol resolution.
-- Reviewer/test commands run via `bash`; Windows is unsupported for now.
+- Commands run through `bash` on POSIX systems; on Windows they go through
+  `cmd.exe` instead — supported on a best-effort basis. Reviewer commands
+  should prefer stdin or `{prompt_file}` there; inline `{prompt}` quoting is
+  fragile under cmd (it expands `%VAR%` even inside quotes).
 - PR/daemon modes need `gh` CLI authenticated and a GitHub `origin` remote.
 - `--fix` runs once and only on local targets; it will not push to a PR branch.
 - LLM review is a heuristic gate, not a correctness proof — it catches slop,

@@ -22,15 +22,25 @@ const DEFAULT_MAX_OUTPUT = 8 * 1024 * 1024;
 const KILL_GRACE_MS = 5 * 1000;
 
 /**
- * Runs a shell command line via `bash -c` and captures output.
- * Never rejects: every outcome is returned as a result object.
+ * Shell used to interpret command lines: `bash -c` on POSIX, `cmd /d /s /c`
+ * on Windows. `platform` is injectable so the choice is unit-testable.
+ * /d skips AutoRun registry commands; /s keeps the command line verbatim.
+ */
+export function shellCommand(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === "win32" ? ["cmd.exe", "/d", "/s", "/c"] : ["bash", "-c"];
+}
+
+/**
+ * Runs a shell command line through the platform shell (see shellCommand)
+ * and captures output. Never rejects: every outcome is a result object.
  */
 export function run(command: string, opts: ExecOptions = {}): Promise<ExecResult> {
   const { promise, resolve } = Promise.withResolvers<ExecResult>();
   const max = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const child = spawn("bash", ["-c", command], {
+  const [shell, ...shellArgs] = shellCommand();
+  const child = spawn(shell!, [...shellArgs, command], {
     cwd: opts.cwd,
     env: opts.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -84,14 +94,57 @@ export function run(command: string, opts: ExecOptions = {}): Promise<ExecResult
   return promise;
 }
 
+/**
+ * Shell command that resolves a binary's path: `command -v` on POSIX,
+ * `where` on Windows. `where` prints every match; callers keep line one.
+ * Injectable platform for tests.
+ */
+export function locateCommand(bin: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return `where ${cmdEscape(bin)}`;
+  return `command -v -- ${shellEscape(bin, platform)}`;
+}
+
 /** Resolves a binary on PATH; returns the absolute path or null. */
 export async function which(bin: string, cwd?: string): Promise<string | null> {
-  const res = await run(`command -v -- ${shellEscape(bin)}`, { cwd, timeoutMs: 10_000 });
-  const path = res.stdout.trim().split("\n")[0];
+  const res = await run(locateCommand(bin), { cwd, timeoutMs: 10_000 });
+  const path = res.stdout.trim().split("\n")[0]?.trim();
   return res.exitCode === 0 && path ? path : null;
 }
 
-/** Escapes a string for safe embedding in a bash command line. */
-export function shellEscape(s: string): string {
+/**
+ * Escapes a string for safe embedding in a command line for the platform
+ * shell: single quotes on POSIX, double quotes on Windows.
+ * Windows caveat: cmd.exe expands %VAR% even inside quotes, so values
+ * carrying % are not fully protectable — controlled call sites only.
+ */
+export function shellEscape(s: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return cmdEscape(s);
+  // POSIX quoting: 'literal', with embedded quotes broken out as '\''.
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * cmd.exe argument quoting per CommandLineToArgvW: wrap in quotes, double
+ * every run of backslashes before a quote or the closing quote, escape
+ * inner quotes with a backslash. % characters stay expandable — see
+ * shellEscape's caveat.
+ */
+function cmdEscape(s: string): string {
+  let out = "";
+  let backslashes = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (ch === "\\") {
+      backslashes++;
+      continue;
+    }
+    if (ch === '"') {
+      out += "\\".repeat(backslashes * 2 + 1) + '"';
+    } else {
+      out += "\\".repeat(backslashes) + ch;
+    }
+    backslashes = 0;
+  }
+  out += "\\".repeat(backslashes * 2);
+  return '"' + out + '"';
 }

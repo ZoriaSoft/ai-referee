@@ -31,13 +31,15 @@ export async function headSha(cwd: string): Promise<string> {
  * else the remote default branch (origin/HEAD), else `main`/`master`.
  */
 export async function defaultBase(cwd: string): Promise<string> {
-  const upstream = await run("git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null", {
+  // No 2>/dev/null: stderr is captured separately anyway, and the
+  // redirection is POSIX-only (cmd.exe would create a literal "null" file).
+  const upstream = await run("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
     cwd,
     timeoutMs: 15_000,
   });
   if (upstream.exitCode === 0 && upstream.stdout.trim()) return upstream.stdout.trim();
 
-  const head = await run("git rev-parse --abbrev-ref origin/HEAD 2>/dev/null", {
+  const head = await run("git rev-parse --abbrev-ref origin/HEAD", {
     cwd,
     timeoutMs: 15_000,
   });
