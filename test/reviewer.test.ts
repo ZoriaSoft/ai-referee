@@ -138,6 +138,19 @@ describe("apiReviewer", () => {
     vi.unstubAllGlobals();
   });
 
+  it("sends response_format json_object when jsonMode is set", async () => {
+    let seen: unknown = null;
+    const body = { choices: [{ message: { content: "{}" } }] };
+    vi.stubGlobal("fetch", vi.fn(async (_u: unknown, init: RequestInit) => {
+      seen = JSON.parse(String(init.body));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+    const reviewer = buildReviewer({ name: "api", type: "api", url: "https://api.test/v1/chat/completions", model: "m", jsonMode: true });
+    await reviewer.invoke("p", process.cwd());
+    expect((seen as Record<string, unknown>).response_format).toEqual({ type: "json_object" });
+    vi.unstubAllGlobals();
+  });
+
 });
 
 describe("cliCommandBinary", () => {

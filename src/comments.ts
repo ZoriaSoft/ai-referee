@@ -53,26 +53,59 @@ export function anchorLine(f: Finding, files: FileDiff[]): number | null {
   return file.rightLines.has(f.line) ? f.line : null;
 }
 
+/** One file-level PR review comment, posted via POST /pulls/{n}/comments. */
+export interface PrFileComment {
+  path: string;
+  body: string;
+}
+
+export interface PrReviewSet {
+  /** Payload for POST /pulls/{n}/reviews (event + line-anchored comments). */
+  payload: PrReviewPayload;
+  /** File-level comments GitHub rejects inside reviews — posted separately. */
+  fileComments: PrFileComment[];
+}
+
+/** Separate POSTs for file-level comments stay cheap; the rest go to the body. */
+const MAX_FILE_COMMENTS = 20;
+
 /**
- * Builds the GitHub `POST /pulls/{n}/reviews` payload: the gate verdict as
- * the review event, findings anchored to diff lines as inline comments, and
- * everything unanchorable listed in the review body instead — a comment
- * pinned to the wrong line is worse than one in the body.
+ * True when a finding's path resolves to a file in the diff unambiguously —
+ * the bar for a subject_type:"file" comment (higher than inline anchoring).
  */
-export function buildPrReview(
-  report: GateReport,
-  files: FileDiff[],
-): PrReviewPayload {
+function resolveFile(f: Finding, files: FileDiff[]): FileDiff | null {
+  const exact = files.find((d) => d.path === f.file);
+  if (exact) return exact;
+  const suffix = files.filter((d) => d.path.endsWith(`/${f.file}`) || f.file.endsWith(`/${d.path}`));
+  return suffix.length === 1 ? suffix[0]! : null;
+}
+
+/**
+ * Builds everything posted to a PR: the review payload plus file-level
+ * comments for findings that cannot anchor to a diff line but do resolve to
+ * a changed file. GitHub's bulk review endpoint has no file-level comments
+ * (subject_type is only on POST /pulls/{n}/comments), so those post separately.
+ * Findings that match no file at all go to the review body — a comment on the
+ * wrong file is worse than one in the body.
+ */
+export function buildPrReviewSet(report: GateReport, files: FileDiff[]): PrReviewSet {
   const comments: PrReviewComment[] = [];
+  const fileComments: PrFileComment[] = [];
   const unanchored: Finding[] = [];
 
   for (const f of report.findings) {
     const line = anchorLine(f, files);
     if (line !== null && comments.length < MAX_INLINE_COMMENTS) {
       comments.push({ path: filePathFor(f, files), line, side: "RIGHT", body: findingBody(f) });
-    } else {
-      unanchored.push(f);
+      continue;
     }
+    const file = resolveFile(f, files);
+    if (file !== null && !file.isDeleted && !file.isBinary && fileComments.length < MAX_FILE_COMMENTS) {
+      const loc = f.line ? `${f.file}:${f.line}` : f.file;
+      fileComments.push({ path: file.path, body: `${findingBody(f)}\n\n_\`${loc}\`_` });
+      continue;
+    }
+    unanchored.push(f);
   }
 
   const sha = report.target.head.replace(/\s+\(worktree\)$/, "").slice(0, 10);
@@ -97,10 +130,13 @@ export function buildPrReview(
   }
 
   return {
-    commit_id: report.target.head,
-    event: report.verdict === "APPROVE" ? "APPROVE" : "REQUEST_CHANGES",
-    body: body.join("\n"),
-    comments,
+    payload: {
+      commit_id: report.target.head,
+      event: report.verdict === "APPROVE" ? "APPROVE" : "REQUEST_CHANGES",
+      body: body.join("\n"),
+      comments,
+    },
+    fileComments,
   };
 }
 

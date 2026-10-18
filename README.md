@@ -116,11 +116,16 @@ Enable with `systemctl --user enable --now ai-referee.service`.
    chunk fails → REJECT.
 5. **Decide.** REJECT if tests failed, any chunk failed, or any chunk verdict
    is REJECT; otherwise APPROVE. Findings are deduplicated and severity-sorted.
+   With `confirmRejections`/`--confirm`, every REJECT is re-judged by the
+   *next* reviewer in the chain — the judge never confirms itself. A second
+   referee that approves downgrades the rejection to a warning; an
+   inconclusive check leaves it standing.
 6. **Report.** Markdown (TTY) or JSON (piped), `--format`, `--out`.
 7. **Optional:** `--fix` runs `fixerCommand` once on REJECT and re-reviews
    (local targets only). `--merge` runs `gh pr merge` on APPROVE (PR only).
    `--comment` posts a GitHub PR review: APPROVE or REQUEST_CHANGES with
-   findings anchored to diff lines as inline comments.
+   findings anchored to diff lines as inline comments; findings that resolve
+   to a changed file but no diff line are posted as file-level comments.
 
 ## Review profiles and path routing
 
@@ -156,6 +161,25 @@ chain.
 A file matching several routes gets the union of their reviewers (route
 order), the first route's profile, and all their instructions.
 
+## Second referee: rejection confirmation
+
+LLM judges sometimes reject on hallucinated findings. Set
+`"confirmRejections": true` (or pass `--confirm` to `review`/`daemon`) and
+every REJECT is contested before the *next* reviewer in that chunk's chain:
+the confirmer sees the diff, the rejection and its findings, and must verify
+them independently. Three outcomes:
+
+- **Overruled** (second referee approves) → the rejection becomes a
+  `warnings[]` entry instead of blocking. The rejection is recorded — not
+  silently dropped.
+- **Confirmed** (second referee rejects) → gate reason reads
+  `reviewer rejected — confirmed by <name>`.
+- **Inconclusive** (no second reviewer, unparseable output) → the REJECT
+  stands; the gate never fails open on its own bookkeeping.
+
+Costs one extra review call per rejected chunk; only meaningful with 2+
+reviewers in the chain.
+
 ## Reviewer config
 
 Ordered fallback chain — put your cheapest/most available reviewer first.
@@ -173,6 +197,7 @@ Ordered fallback chain — put your cheapest/most available reviewer first.
     "url": "https://api.example.com/v1/chat/completions",
     "model": "gpt-5-mini",
     "apiKeyEnv": "OPENAI_API_KEY",
+    "jsonMode": true,   // ask the endpoint for strict JSON output
     "timeoutMs": 300000
   }
 ]
@@ -200,6 +225,7 @@ When an `api` reviewer reports `usage`, token counts are summed into
 | `autoMerge` | `false` | Allow `--merge`/`daemon --merge` |
 | `prComments` | `false` | Post verdict + anchored findings as a GitHub PR review |
 | `daemonIntervalSec` | 120 | Daemon poll interval |
+| `confirmRejections` | `false` | Second referee verifies each REJECT (overruled → warning); `--confirm` per run |
 | `workdir` | `null` | Subdirectory for test/fix commands (monorepos) |
 | `profile` | `"strict"` | Default prompt profile; `--light`/`--strict` override per run |
 | `routes` | `[]` | Per-path reviewer routing (see above) |
@@ -208,10 +234,10 @@ When an `api` reviewer reports `usage`, token counts are summed into
 
 ```
 ai-referee review [--pr N] [--base REF] [--uncommitted] [--fix] [--merge]
-                  [--comment] [--skip-tests] [--strict | --light]
+                  [--comment] [--confirm] [--skip-tests] [--strict | --light]
                   [--format md|json|both] [--out FILE]
 ai-referee daemon [--interval SEC] [--once] [--merge] [--comment] [--fix]
-                  [--strict | --light]
+                  [--confirm] [--strict | --light]
 ai-referee hook install
 ai-referee doctor
 ai-referee init

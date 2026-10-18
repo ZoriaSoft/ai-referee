@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anchorLine, buildPrReview } from "../src/comments.js";
+import { anchorLine, buildPrReviewSet } from "../src/comments.js";
 import { parseDiff } from "../src/diff.js";
 import type { Finding, GateReport } from "../src/types.js";
 
@@ -81,44 +81,57 @@ describe("anchorLine", () => {
   });
 });
 
-describe("buildPrReview", () => {
+describe("buildPrReviewSet", () => {
   it("maps REJECT to REQUEST_CHANGES with anchored inline comments", () => {
-    const r = buildPrReview(report([finding("src/a.ts", 2, "blocker")]), files);
-    expect(r.event).toBe("REQUEST_CHANGES");
-    expect(r.commit_id).toBe("abc123def456");
-    expect(r.comments).toEqual([
+    const { payload, fileComments } = buildPrReviewSet(report([finding("src/a.ts", 2, "blocker")]), files);
+    expect(payload.event).toBe("REQUEST_CHANGES");
+    expect(payload.commit_id).toBe("abc123def456");
+    expect(payload.comments).toEqual([
       { path: "src/a.ts", line: 2, side: "RIGHT", body: expect.stringContaining("BLOCKER") },
     ]);
+    expect(fileComments).toEqual([]);
   });
 
   it("maps APPROVE to the APPROVE event", () => {
-    const r = buildPrReview(report([], "APPROVE"), files);
-    expect(r.event).toBe("APPROVE");
-    expect(r.comments).toEqual([]);
+    const { payload } = buildPrReviewSet(report([], "APPROVE"), files);
+    expect(payload.event).toBe("APPROVE");
+    expect(payload.comments).toEqual([]);
   });
 
-  it("moves unanchorable findings into the review body", () => {
-    const r = buildPrReview(
-      report([finding("src/a.ts", 2), finding("src/missing.ts", 5), finding("src/a.ts", 77)]),
+  it("file-anchors findings on a changed file whose line misses the diff", () => {
+    const { payload, fileComments } = buildPrReviewSet(
+      report([finding("src/a.ts", 2), finding("src/a.ts", 77), finding("src/a.ts", null)]),
       files,
     );
-    expect(r.comments).toHaveLength(1);
-    expect(r.body).toContain("Findings without a diff anchor");
-    expect(r.body).toContain("src/missing.ts:5");
-    expect(r.body).toContain("src/a.ts:77");
+    expect(payload.comments).toHaveLength(1); // line 2 anchors inline
+    expect(fileComments).toHaveLength(2); // 77 and null anchor to the file
+    expect(fileComments[0]).toMatchObject({ path: "src/a.ts" });
+    expect(fileComments[0]!.body).toContain("src/a.ts:77");
+    expect(payload.body).not.toContain("Findings without a diff anchor");
+  });
+
+  it("keeps file-level comments off deleted files and unknown paths", () => {
+    const { payload, fileComments } = buildPrReviewSet(
+      report([finding("src/gone.ts", null), finding("src/missing.ts", 5)]),
+      files,
+    );
+    expect(fileComments).toHaveLength(0);
+    expect(payload.body).toContain("Findings without a diff anchor");
+    expect(payload.body).toContain("src/missing.ts:5");
+    expect(payload.body).toContain("src/gone.ts");
   });
 
   it("includes the verdict, summary and gate reasons in the body", () => {
-    const r = buildPrReview(report([]), files);
-    expect(r.body).toContain("REJECTED");
-    expect(r.body).toContain("found issues");
-    expect(r.body).toContain("reviewer rejected");
+    const { payload } = buildPrReviewSet(report([]), files);
+    expect(payload.body).toContain("REJECTED");
+    expect(payload.body).toContain("found issues");
+    expect(payload.body).toContain("reviewer rejected");
   });
 
-  it("caps inline comments and overflows the rest into the body", () => {
+  it("caps inline comments; overflow becomes file-level comments", () => {
     const many = Array.from({ length: 55 }, () => finding("src/a.ts", 2));
-    const r = buildPrReview(report(many), files);
-    expect(r.comments).toHaveLength(50);
-    expect(r.body).toContain("Findings without a diff anchor");
+    const { payload, fileComments } = buildPrReviewSet(report(many), files);
+    expect(payload.comments).toHaveLength(50);
+    expect(fileComments.length).toBeGreaterThan(0);
   });
 });

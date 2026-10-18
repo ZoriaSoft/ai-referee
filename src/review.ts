@@ -5,7 +5,7 @@ import type { Config } from "./config.js";
 import { globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
 import { run } from "./exec.js";
 import * as git from "./git.js";
-import { buildPrReview, REVIEW_MARKER } from "./comments.js";
+import { buildPrReviewSet, REVIEW_MARKER } from "./comments.js";
 import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
 import { chunkFilesByRoute, type ReviewPlan } from "./routing.js";
@@ -44,6 +44,8 @@ export interface ReviewOptions {
   maxParseRetries?: number;
   /** Prompt profile override; defaults to config.profile ("strict"). */
   profile?: ReviewProfile;
+  /** Verify REJECT verdicts with a second reviewer; defaults to config.confirmRejections. */
+  confirmRejections?: boolean;
 }
 
 export class ReviewError extends Error {}
@@ -141,6 +143,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     contextBudget: config.contextBudget,
     chunkBudget: config.chunkBudget,
     routes: config.routes,
+    confirmRejections: opts.confirmRejections ?? config.confirmRejections,
     round: 1,
   });
 
@@ -174,6 +177,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       contextBudget: config.contextBudget,
       chunkBudget: config.chunkBudget,
       routes: config.routes,
+      confirmRejections: opts.confirmRejections ?? config.confirmRejections,
       round: 2,
     });
     const reTests = await runTests(config, wt, false);
@@ -226,10 +230,22 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
 
   if (report.comments.requested && target.pr !== undefined) {
     try {
-      const payload = buildPrReview(report, allFiles);
+      const { payload, fileComments } = buildPrReviewSet(report, allFiles);
       await git.ghPostReview(opts.cwd, target.pr, payload);
       report.comments.posted = true;
       let detail = `posted ${payload.event} with ${payload.comments.length} inline comment(s)`;
+      let filePosted = 0;
+      let fileFailed = 0;
+      for (const fc of fileComments) {
+        try {
+          await git.ghPostFileComment(opts.cwd, target.pr, { ...fc, commit_id: report.target.head });
+          filePosted++;
+        } catch {
+          fileFailed++;
+        }
+      }
+      if (filePosted) detail += ` + ${filePosted} file-level comment(s)`;
+      if (fileFailed) detail += ` (${fileFailed} file comment(s) failed)`;
       try {
         const dismissed = await dismissStaleReviews(opts.cwd, target.pr, target.head);
         if (dismissed > 0) detail += `; dismissed ${dismissed} superseded review(s)`;
@@ -296,9 +312,11 @@ async function reviewChunks(opts: {
   contextBudget: number;
   chunkBudget: number;
   routes: Config["routes"];
+  /** Verify each REJECT with the next reviewer in the chunk's chain. */
+  confirmRejections: boolean;
   round: number;
 }): Promise<ChunkResult[]> {
-  const { files, byName, defaultChain, runProfile, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, round } = opts;
+  const { files, byName, defaultChain, runProfile, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, confirmRejections, round } = opts;
 
   // Plan per file (route match → reviewer subset, profile, instructions),
   // then chunk so routed and unrouted files never share a prompt.
@@ -365,6 +383,74 @@ async function reviewChunks(opts: {
           result.failedReason = `unparseable verdict after ${attempt + 1} attempt(s): ${why}`;
         } else {
           prompt = buildParseRetryPrompt(why);
+        }
+      }
+    }
+
+    // Second-referee check: a REJECT is contested before the next reviewer in
+    // the chunk's chain — the one who already judged must not confirm itself.
+    // An overruled rejection is downgraded to a warning in decideVerdict; an
+    // inconclusive check leaves the rejection standing (fail closed).
+    if (confirmRejections && result.parsed?.verdict === "REJECT" && !result.failedReason) {
+      const judge = [...result.attempts].reverse().find((a) => a.ok)?.reviewer ?? null;
+      const confirmChain = chain.filter((r) => r.name !== judge);
+      if (confirmChain.length === 0) {
+        result.confirmation = {
+          reviewer: null,
+          verdict: null,
+          overruled: false,
+          detail: "no second referee available to confirm",
+          findings: [],
+        };
+      } else {
+        const confirmPrompt = buildReviewPrompt({
+          index: chunk.index,
+          files: result.files,
+          patch: chunk.patch,
+          truncated: chunk.truncated,
+          totalChunks: planned.length,
+          base: target.base,
+          head: target.head,
+          repoNote,
+          profile: plan.profile,
+          instructions: plan.instructions,
+          contextFiles,
+          contextSkipped,
+          contested: {
+            reviewer: judge ?? "unknown",
+            summary: result.parsed.summary,
+            findings: result.parsed.findings,
+          },
+        });
+        const checked = await invokeChain(confirmChain, confirmPrompt, worktree);
+        result.attempts.push(...checked.attempts.map((a) => ({ ...a, phase: "confirm" as const })));
+        if (!checked.response) {
+          result.confirmation = {
+            reviewer: null,
+            verdict: null,
+            overruled: false,
+            detail: "second referee unavailable",
+            findings: [],
+          };
+        } else {
+          const confirmer = checked.attempts[checked.attempts.length - 1]!.reviewer;
+          try {
+            const parsed = parseVerdict(checked.response.output);
+            result.confirmation = {
+              reviewer: confirmer,
+              verdict: parsed.verdict,
+              overruled: parsed.verdict === "APPROVE",
+              findings: parsed.findings,
+            };
+          } catch (err) {
+            result.confirmation = {
+              reviewer: confirmer,
+              verdict: null,
+              overruled: false,
+              detail: `confirmation verdict unparseable: ${err instanceof VerdictParseError ? err.message : String(err)}`,
+              findings: [],
+            };
+          }
         }
       }
     }
@@ -435,7 +521,7 @@ function aggregateFindings(chunks: ChunkResult[]): Finding[] {
   const out: Finding[] = [];
   const order: Record<string, number> = { blocker: 0, major: 1, minor: 2, info: 3 };
   for (const c of chunks) {
-    for (const f of c.parsed?.findings ?? []) {
+    for (const f of [...(c.parsed?.findings ?? []), ...(c.confirmation?.findings ?? [])]) {
       const key = `${f.file}:${f.line ?? ""}:${f.message.toLowerCase().slice(0, 80)}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -459,13 +545,24 @@ function decideVerdict(
     if (c.failedReason) {
       reasons.push(`chunk ${c.index + 1}: ${c.failedReason}`);
     } else if (c.parsed?.verdict === "REJECT") {
-      // Light profile: the reviewer should only reject on blockers. A REJECT
-      // that lists no blocker finding is reviewer noise — warn, don't gate.
-      // Zero findings can't be reclassified, so it still fails closed.
-      if (c.profile === "light" && c.parsed.findings.length > 0 && !c.parsed.findings.some((f) => f.severity === "blocker")) {
+      const judge = [...c.attempts].reverse().find((a) => a.ok && a.phase !== "confirm")?.reviewer;
+      if (c.confirmation?.overruled) {
+        // Second referee rejected the rejection — warn, don't gate.
+        warnings.push(
+          `chunk ${c.index + 1}: ${judge ?? "reviewer"} rejected but ${c.confirmation.reviewer} overruled — treated as warning`,
+        );
+      } else if (c.profile === "light" && c.parsed.findings.length > 0 && !c.parsed.findings.some((f) => f.severity === "blocker")) {
+        // Light profile: the reviewer should only reject on blockers. A REJECT
+        // that lists no blocker finding is reviewer noise — warn, don't gate.
+        // Zero findings can't be reclassified, so it still fails closed.
         warnings.push(
           `chunk ${c.index + 1}: light review rejected without blocker findings — treated as warning`,
         );
+      } else if (c.confirmation !== undefined) {
+        const suffix = c.confirmation.verdict === "REJECT"
+          ? ` — confirmed by ${c.confirmation.reviewer}`
+          : ` (${c.confirmation.detail ?? "confirmation inconclusive"})`;
+        reasons.push(`chunk ${c.index + 1}: reviewer rejected${suffix}`);
       } else {
         reasons.push(`chunk ${c.index + 1}: reviewer rejected`);
       }

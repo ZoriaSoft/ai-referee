@@ -68,9 +68,10 @@ export function toMarkdown(report: GateReport): string {
     lines.push(routed ? "|---|---|---|---|---|---|" : "|---|---|---|---|---|");
     for (const a of attempts) {
       const routeCell = [a.route ?? "", a.profile !== "strict" ? `(${a.profile})` : ""].filter(Boolean).join(" ");
+      const referee = a.phase === "confirm" ? `${a.reviewer} (2nd opinion)` : a.reviewer;
       const cells = routed
-        ? [a.chunk, routeCell || "—", a.reviewer, a.ok ? "answered" : "failed", a.durationMs, a.detail]
-        : [a.chunk, a.reviewer, a.ok ? "answered" : "failed", a.durationMs, a.detail];
+        ? [a.chunk, routeCell || "—", referee, a.ok ? "answered" : "failed", a.durationMs, a.detail]
+        : [a.chunk, referee, a.ok ? "answered" : "failed", a.durationMs, a.detail];
       lines.push(`| ${cells.map((c) => String(c).replaceAll("|", "\\|")).join(" | ")} |`);
     }
   }

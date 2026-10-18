@@ -42,4 +42,19 @@ describe("buildReviewPrompt profiles", () => {
     const prompt = buildReviewPrompt({ ...base, instructions: ["  ", ""] });
     expect(prompt).not.toContain("Additional instructions");
   });
+
+  it("contested mode relays the prior rejection and demands verification", () => {
+    const prompt = buildReviewPrompt({
+      ...base,
+      contested: {
+        reviewer: "judge",
+        summary: "it breaks everything",
+        findings: [{ file: "src/a.ts", line: 2, severity: "blocker", message: "npe on x" }],
+      },
+    });
+    expect(prompt).toContain('Another referee ("judge") already REJECTED');
+    expect(prompt).toContain("it breaks everything");
+    expect(prompt).toContain("- [blocker] src/a.ts:2: npe on x");
+    expect(prompt).toContain("APPROVE if the rejection is wrong");
+  });
 });

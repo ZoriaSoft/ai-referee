@@ -25,6 +25,8 @@ export interface ReviewerConfig {
   headers?: Record<string, string>;
   /** Send the prompt on stdin for cli reviewers. Default true unless {prompt} or {prompt_file} appears in command. */
   stdin?: boolean;
+  /** api only: request response_format {type:"json_object"} — fewer parse failures on compatible endpoints. */
+  jsonMode?: boolean;
   timeoutMs?: number;
 }
 
@@ -68,6 +70,8 @@ export interface Config {
   contextBudget: number;
   /** Seconds between daemon polls. */
   daemonIntervalSec: number;
+  /** Verify every REJECT with a second reviewer; an overruled rejection warns instead of blocking. Default false. */
+  confirmRejections: boolean;
   /** Working directory for test/fix commands relative to repo root. */
   workdir: string | null;
 }
@@ -95,6 +99,7 @@ export const DEFAULT_CONFIG: Config = {
   reviewConcurrency: 2,
   contextBudget: 40_000,
   daemonIntervalSec: 120,
+  confirmRejections: false,
   workdir: null,
 };
 
@@ -156,6 +161,7 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
   if ("reviewConcurrency" in raw) cfg.reviewConcurrency = num(raw.reviewConcurrency, "reviewConcurrency", path);
   if ("contextBudget" in raw) cfg.contextBudget = num(raw.contextBudget, "contextBudget", path);
   if ("daemonIntervalSec" in raw) cfg.daemonIntervalSec = num(raw.daemonIntervalSec, "daemonIntervalSec", path);
+  if ("confirmRejections" in raw) cfg.confirmRejections = raw.confirmRejections === true;
   if ("workdir" in raw) cfg.workdir = raw.workdir === null ? null : str(raw.workdir, "workdir", path);
   return cfg;
 }
@@ -176,6 +182,7 @@ function parseReviewer(raw: unknown, where: string, path: string): ReviewerConfi
   if (r.model !== undefined) reviewer.model = str(r.model, `${where}.model`, path);
   if (r.apiKeyEnv !== undefined) reviewer.apiKeyEnv = str(r.apiKeyEnv, `${where}.apiKeyEnv`, path);
   if (r.stdin !== undefined) reviewer.stdin = r.stdin === true;
+  if (r.jsonMode !== undefined) reviewer.jsonMode = r.jsonMode === true;
   if (r.timeoutMs !== undefined) reviewer.timeoutMs = num(r.timeoutMs, `${where}.timeoutMs`, path);
   if (r.headers !== undefined) {
     if (typeof r.headers !== "object" || r.headers === null) {

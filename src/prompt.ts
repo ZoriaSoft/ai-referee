@@ -12,7 +12,7 @@ const VERDICT_SCHEMA = `{
   ]
 }`;
 
-import type { ReviewProfile } from "./types.js";
+import type { Finding, ReviewProfile } from "./types.js";
 
 const PROFILE_RULES: Record<ReviewProfile, string[]> = {
   strict: [
@@ -49,8 +49,13 @@ export function buildReviewPrompt(opts: {
   profile?: ReviewProfile;
   /** Route-provided extra instructions, injected before the rules. */
   instructions?: string[];
+  /**
+   * Second-referee mode: another referee already rejected this chunk.
+   * The confirmer re-judges whether that rejection actually stands.
+   */
+  contested?: { reviewer: string; summary: string; findings: Finding[] };
 }): string {
-  const { index, files, patch, truncated, totalChunks, base, head, repoNote, profile } = {
+  const { index, files, patch, truncated, totalChunks, base, head, repoNote, profile, contested } = {
     profile: "strict" as ReviewProfile,
     ...opts,
   };
@@ -73,6 +78,21 @@ export function buildReviewPrompt(opts: {
   const extra = (opts.instructions ?? []).filter((s) => s.trim().length > 0);
   if (extra.length) {
     parts.push("", "Additional instructions for this path:", ...extra.map((s) => `- ${s}`));
+  }
+  if (contested) {
+    const cited = contested.findings
+      .map((f) => `- [${f.severity}] ${f.file}${f.line ? `:${f.line}` : ""}: ${f.message}`)
+      .join("\n");
+    parts.push(
+      "",
+      `Another referee ("${contested.reviewer}") already REJECTED this change:`,
+      contested.summary,
+      ...(cited ? [cited] : []),
+      "Independently verify each cited finding against the diff below.",
+      "APPROVE if the rejection is wrong, overstated, or the findings are not real problems.",
+      "REJECT only if at least one cited finding is genuine — with your own corrected",
+      "findings list if the original got details wrong.",
+    );
   }
   parts.push(
     "",

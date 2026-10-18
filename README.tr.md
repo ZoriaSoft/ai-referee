@@ -45,9 +45,14 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
 - Markdown (TTY) ve JSON (pipe) rapor; `--format`, `--out`.
 - `--fix`: REJECT'te `fixerCommand`'ı bir kez çalıştırıp yeniden inceler.
 - `--comment`: PR'a GitHub review'ı olarak yazar — diff satırlarına denk gelen
-  bulgular satır içi yorum olur, kalanlar review gövdesine girer. Yeni bir head
+  bulgular satır içi yorum olur; satıra denk gelmeyip dosyası diff'te olanlar
+  dosya seviyesi yoruma düşer, kalanlar review gövdesine girer. Yeni bir head
   incelendiğinde, eski commit'e ait ai-referee `CHANGES_REQUESTED` review'ları
   otomatik dismiss edilir; insan review'larına dokunulmaz.
+- `--confirm` (veya `"confirmRejections": true`): her REJECT, zincirdeki
+  **ikinci hakeme** doğrulatılır — yargılayan hakem kendini onaylayamaz.
+  İkinci hakem APPROVE derse ret kararı engellemek yerine uyarıya dönüşür;
+  doğrulama yapılamazsa REJECT olduğu gibi kalır (kapı kendini asla açmaz).
 - `doctor`: config, reviewer binary'leri, API anahtarları ve `gh` kimliğini
   tek komutta doğrular.
 - `daemon`: `gh pr list`'i yoklar, her yeni PR head'ini bir kez inceler,

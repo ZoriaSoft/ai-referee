@@ -42,6 +42,7 @@ function cfg(overrides: Partial<Config>): Config {
     routes: [],
     contextBudget: 40_000,
     daemonIntervalSec: 120,
+    confirmRejections: false,
     workdir: null,
     ...overrides,
   };
@@ -535,6 +536,103 @@ describe("runReview pipeline", () => {
     } finally {
       process.env.PATH = savedPath;
     }
+  });
+
+  it("second referee overrules a REJECT into a warning when --confirm", async () => {
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "judge", type: "cli", command: echo(REJECT) },
+          { name: "appeals", type: "cli", command: echo(APPROVE) },
+        ],
+      }),
+      base: "main",
+      confirmRejections: true,
+    });
+    expect(report.verdict).toBe("APPROVE");
+    expect(report.warnings.join(" ")).toContain("overruled");
+    const chunk = report.chunks[0]!;
+    expect(chunk.confirmation?.verdict).toBe("APPROVE");
+    expect(chunk.confirmation?.reviewer).toBe("appeals");
+    // The judge must not confirm itself: exactly one confirm-phase attempt.
+    expect(chunk.attempts.filter((a) => a.phase === "confirm")).toHaveLength(1);
+  });
+
+  it("REJECT stands with a 'confirmed' reason when the second referee agrees", async () => {
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "judge", type: "cli", command: echo(REJECT) },
+          { name: "appeals", type: "cli", command: echo(REJECT) },
+        ],
+      }),
+      base: "main",
+      confirmRejections: true,
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.reasons.join(" ")).toContain("confirmed by appeals");
+  });
+
+  it("REJECT stands when no second referee exists — single reviewer chain", async () => {
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({ reviewers: [{ name: "lone", type: "cli", command: echo(REJECT) }] }),
+      base: "main",
+      confirmRejections: true,
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.reasons.join(" ")).toContain("no second referee");
+  });
+
+  it("REJECT stands when the second referee cannot answer or parses garbage", async () => {
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "judge", type: "cli", command: echo(REJECT) },
+          { name: "gone", type: "cli", command: "exit 1" },
+        ],
+      }),
+      base: "main",
+      confirmRejections: true,
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.reasons.join(" ")).toContain("second referee unavailable");
+  });
+
+  it("skips confirmation entirely when the flag is off", async () => {
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "judge", type: "cli", command: echo(REJECT) },
+          { name: "appeals", type: "cli", command: echo(APPROVE) },
+        ],
+      }),
+      base: "main",
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.chunks[0]!.confirmation).toBeUndefined();
+    expect(report.chunks[0]!.attempts.filter((a) => a.phase === "confirm")).toHaveLength(0);
+  });
+
+  it("confirmation findings merge into the report", async () => {
+    const second = `{"verdict":"REJECT","summary":"confirmed","findings":[{"file":"a.ts","line":3,"severity":"minor","message":"extra issue found by second referee"}]}`;
+    const report = await runReview({
+      cwd: dir,
+      config: cfg({
+        reviewers: [
+          { name: "judge", type: "cli", command: echo(REJECT) },
+          { name: "appeals", type: "cli", command: echo(second) },
+        ],
+      }),
+      base: "main",
+      confirmRejections: true,
+    });
+    expect(report.verdict).toBe("REJECT");
+    expect(report.findings.some((f) => f.message.includes("second referee"))).toBe(true);
   });
 
 });

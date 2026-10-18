@@ -153,6 +153,26 @@ export async function ghPostReview(cwd: string, pr: number, payload: GhReviewPay
   return res.stdout.trim();
 }
 
+/**
+ * Posts one file-level PR comment (subject_type:"file") through `gh api`.
+ * The bulk reviews endpoint does not support file-level comments, so these
+ * travel individually — caller treats failures as best-effort.
+ */
+export async function ghPostFileComment(
+  cwd: string,
+  pr: number,
+  comment: { path: string; body: string; commit_id: string },
+): Promise<void> {
+  const res = await run(`gh api repos/{owner}/{repo}/pulls/${pr}/comments -X POST --input -`, {
+    cwd,
+    stdin: JSON.stringify({ ...comment, subject_type: "file" }),
+    timeoutMs: 30_000,
+  });
+  if (res.exitCode !== 0) {
+    throw new GitError(`gh api comments failed: ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+}
+
 /** One PR review as returned by `GET /pulls/{n}/reviews`. */
 export interface GhPrReview {
   id: number;

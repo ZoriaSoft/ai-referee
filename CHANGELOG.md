@@ -5,8 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 
-## [Unreleased] — round 4 (2026-10-18)
+## [Unreleased] — round 5 (2026-10-18)
 
+### Added
+
+- Second-referee rejection confirmation: `confirmRejections` config and
+  `--confirm` on `review`/`daemon`. A chunk REJECT is re-judged by the *next*
+  reviewer in that chunk's chain (the judge never confirms itself) with the
+  original findings contested in the prompt. Second referee approves → the
+  rejection downgrades to a `warnings[]` entry; rejects → the gate reason
+  reads "confirmed by \<name\>"; no second reviewer or unparseable output →
+  the REJECT stands (fail closed). `ChunkResult.confirmation` records the
+  outcome; confirmer findings merge into the report; confirm-phase calls are
+  marked "(2nd opinion)" in the referee log.
+- File-level PR comments: findings that resolve to a changed file but not to
+  a diff line now post via `POST /pulls/{n}/comments` with
+  `subject_type:"file"` (GitHub's bulk review endpoint does not accept
+  file-level comments, so they go one-by-one, best-effort). Deleted/binary
+  files and ambiguous paths still fall back to the review body.
+- `jsonMode` on `api` reviewers sends
+  `response_format: {type: "json_object"}` — fewer unparseable verdicts on
+  OpenAI-compatible endpoints that support JSON mode.
+
+## [Unreleased] — round 4 (2026-10-18)
 ### Added
 
 - Stale review dismissal: posted PR reviews carry an invisible

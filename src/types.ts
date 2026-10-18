@@ -34,6 +34,8 @@ export interface ReviewerAttempt {
   durationMs: number;
   /** Token counts when an api reviewer reports usage; absent for cli. */
   tokens?: TokenUsage;
+  /** "confirm" marks a second-referee call made to check a REJECT verdict. */
+  phase?: "confirm";
 }
 
 export interface TestResult {
@@ -58,6 +60,18 @@ export interface ChunkResult {
   profile: ReviewProfile;
   /** Labels of matching routes joined with "+" (e.g. "auth-security"); null when no route matched. */
   route: string | null;
+  /** Set when a second referee checked this chunk's REJECT (confirmRejections). */
+  confirmation?: {
+    /** Reviewer that answered the confirmation prompt; null when nobody did. */
+    reviewer: string | null;
+    /** Second verdict; null when the check could not produce one. */
+    verdict: Verdict | null;
+    /** True when the second referee approved — the rejection is overruled. */
+    overruled: boolean;
+    /** Why the check was inconclusive, when verdict is null. */
+    detail?: string;
+    findings: Finding[];
+  };
 }
 
 export interface GateReport {

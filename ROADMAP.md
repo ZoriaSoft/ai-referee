@@ -79,18 +79,31 @@ Owner decides.
       blocking — the prompt contract now holds at the gate, not just in the
       prompt. Zero-finding REJECTs can't be reclassified: still fail closed.
 
+## Done — round 5
+
+- [x] **Second-referee rejection confirmation** (`confirmRejections`,
+      `--confirm`): a REJECT is contested before the next reviewer in the
+      chain — judge can't confirm itself. Overruled → warning; confirmed →
+      reason names the confirmer; inconclusive → REJECT stands. Outcome
+      recorded on `ChunkResult.confirmation`, confirmer findings merged.
+- [x] **File-level PR comments**: unanchorable findings that resolve to a
+      changed file post via `subject_type:"file"` comments (bulk review
+      endpoint can't take them — separate best-effort calls).
+- [x] **`jsonMode` for api reviewers**: opt-in
+      `response_format:{type:"json_object"}` for compatible endpoints.
+
 ## Next (priority order)
 
 - [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
-      to a route-matched fixer instead. (Deferred round 4 — few real setups
-      need a second fixer; dismissal/backoff/light-gate were higher value.)
+      to a route-matched fixer instead. (Deferred round 5 — few real setups
+      need a second fixer; confirmation + file comments were higher value.)
 - [ ] **Windows support**: reviewer/test commands via `cmd /c` fallback.
 - [ ] **Multi-line inline comments**: GitHub supports start_line+line ranges;
       models would need to report line ranges, not single lines.
-- [ ] **Comment threading on unchanged code**: findings on unchanged lines
-      adjacent to the diff could anchor via `subject_type: "file"`.
 - [ ] **Daemon concurrency**: PRs review sequentially today; a bounded pool
-      could overlap independent PR reviews.
+      could overlap independent PR reviews. Blocked on a real race:
+      `git fetch refs/pull/<n>/head` writes shared `FETCH_HEAD` — parallel
+      reviews need serialized fetch (or fetch-into-per-PR ref) first.
 
 ## Known limits
 

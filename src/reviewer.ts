@@ -127,6 +127,8 @@ function apiReviewer(cfg: ReviewerConfig): Reviewer {
             model,
             messages: [{ role: "user", content: prompt }],
             temperature: 0,
+            // Opt-in: OpenAI-compatible JSON mode keeps verdicts parseable.
+            ...(cfg.jsonMode ? { response_format: { type: "json_object" } } : {}),
           }),
         });
         const durationMs = Date.now() - started;

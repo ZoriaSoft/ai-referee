@@ -37,6 +37,17 @@ describe("loadConfig", () => {
     const { config } = await loadConfig(cwd);
     expect(config.testCommand).toBe("make check");
     expect(config.reviewers).toHaveLength(1);
+    expect(config.confirmRejections).toBe(false); // default off
+  });
+
+  it("parses confirmRejections and jsonMode", async () => {
+    const cwd = await writeCfg(`{
+      "confirmRejections": true,
+      "reviewers": [{"name":"a","type":"api","url":"https://x/v1/chat/completions","jsonMode":true}],
+    }`);
+    const { config } = await loadConfig(cwd);
+    expect(config.confirmRejections).toBe(true);
+    expect(config.reviewers[0]!.jsonMode).toBe(true);
   });
 
   it("rejects a cli reviewer without command", async () => {

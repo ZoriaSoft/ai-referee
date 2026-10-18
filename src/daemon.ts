@@ -18,6 +18,8 @@ export interface DaemonOptions {
   fix?: boolean;
   /** Prompt profile override applied to every polled PR. */
   profile?: "strict" | "light";
+  /** Verify each REJECT with a second referee; defaults to config.confirmRejections. */
+  confirmRejections?: boolean;
   /** Written under <cwd>/.ai-referee/daemon-state.json */
   statePath?: string;
   log?: (msg: string) => void;
@@ -72,6 +74,7 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
           autoMerge: opts.autoMerge === true && config.autoMerge,
           postComments: opts.postComments === true,
           fix: opts.fix === true,
+          confirmRejections: opts.confirmRejections,
           profile: opts.profile,
         });
         log(

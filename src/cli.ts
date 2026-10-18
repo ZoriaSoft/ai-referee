@@ -29,7 +29,7 @@ REVIEW OPTIONS
   --fix               one fixer round on REJECT, then re-review (local only)
   --merge             gh pr merge when the verdict is APPROVE (PR only)
   --comment           post the verdict + findings as a GitHub PR review (PR only)
-  --skip-tests        skip the configured test command
+  --confirm           verify each REJECT with a second referee before blocking
   --strict            strict profile: full review (default)
   --light             light profile: only merge-blocking problems may reject
   --format <fmt>      markdown | json | both   (default: markdown on a TTY, json when piped)
@@ -41,7 +41,7 @@ DAEMON OPTIONS
   --once              single poll, then exit
   --merge             auto-merge PRs that pass the gate
   --comment           post each verdict as a GitHub PR review
-  --strict/--light    prompt profile override for every polled PR
+  --confirm           verify each REJECT with a second referee
   --fix               run one fixer round on REJECT (no-op for PR worktrees)
 
 EXIT CODES
@@ -92,6 +92,11 @@ const STARTER_CONFIG = `{
   //     "instructions": "check auth bypass and secret handling"
   //   }
   // ],
+
+  // Second referee: each REJECT is verified by the next reviewer in the
+  // chain; an overruled rejection warns instead of blocking (needs 2+
+  // reviewers). "jsonMode": true on api reviewers asks for strict JSON.
+  // "confirmRejections": true,
 
   "chunkBudget": 100000,
   "exclude": ["*.lock", "package-lock.json", "dist/**", "*.min.js"]
@@ -156,6 +161,7 @@ function parseCommon(rest: string[]) {
       interval: { type: "string" },
       once: { type: "boolean", default: false },
       comment: { type: "boolean", default: false },
+      confirm: { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       light: { type: "boolean", default: false },
     },
@@ -203,6 +209,7 @@ async function cmdReview(rest: string[]): Promise<number> {
       fix: v.fix,
       autoMerge: v.merge,
       postComments: (v.comment || config.prComments) && pr !== undefined,
+      confirmRejections: v.confirm || undefined,
       profile: profileFromFlags(v) ?? undefined,
     });
   } catch (err) {
@@ -240,6 +247,7 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     autoMerge: v.merge,
     postComments: v.comment || config.prComments,
     fix: v.fix,
+    confirmRejections: v.confirm || undefined,
     profile: profileFromFlags(v) ?? undefined,
   });
 }
