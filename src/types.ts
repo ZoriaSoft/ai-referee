@@ -114,4 +114,11 @@ export interface GateReport {
     posted: boolean;
     detail: string | null;
   };
+  /** GitHub commit status on the head SHA (PR targets; context "ai-referee"). */
+  status: {
+    requested: boolean;
+    /** Last state GitHub accepted ("pending" if the final post failed); null when nothing posted. */
+    state: "pending" | "success" | "failure" | null;
+    detail: string | null;
+  };
 }

@@ -50,6 +50,17 @@ describe("loadConfig", () => {
     expect(config.reviewers[0]!.jsonMode).toBe(true);
   });
 
+  it("parses commitStatus and prComments", async () => {
+    const cwd = await writeCfg(`{ "commitStatus": true, "prComments": true }`);
+    const { config } = await loadConfig(cwd);
+    expect(config.commitStatus).toBe(true);
+    expect(config.prComments).toBe(true);
+    const none = await mkdtemp(join(tmpdir(), "air-cfg-none-"));
+    dirs.push(none);
+    const { config: def } = await loadConfig(none);
+    expect(def.commitStatus).toBe(false);
+  });
+
   it("rejects a cli reviewer without command", async () => {
     const cwd = await writeCfg(`{"reviewers":[{"name":"x","type":"cli"}]}`);
     await expect(loadConfig(cwd)).rejects.toThrow(ConfigError);

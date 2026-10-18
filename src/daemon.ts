@@ -15,6 +15,8 @@ export interface DaemonOptions {
   autoMerge?: boolean;
   /** Post each verdict as a GitHub PR review (needs `gh api` access). */
   postComments?: boolean;
+  /** Post a GitHub commit status on each PR head (context "ai-referee"). */
+  postStatus?: boolean;
   fix?: boolean;
   /** Prompt profile override applied to every polled PR. */
   profile?: "strict" | "light";
@@ -86,13 +88,15 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
           pr: pr.number,
           autoMerge: opts.autoMerge === true && config.autoMerge,
           postComments: opts.postComments === true,
+          postStatus: opts.postStatus === true,
           fix: opts.fix === true,
           confirmRejections: opts.confirmRejections,
           profile: opts.profile,
         });
         log(
           `#${pr.number} → ${report.verdict} (${report.findings.length} findings)` +
-            (report.comments.requested ? `; review post: ${report.comments.detail ?? (report.comments.posted ? "ok" : "?")}` : ""),
+            (report.comments.requested ? `; review post: ${report.comments.detail ?? (report.comments.posted ? "ok" : "?")}` : "") +
+            (report.status.requested ? `; status: ${report.status.detail ?? "none"}` : ""),
         );
         await writeReport(cwd, pr.number, report);
         state.reviewed[String(pr.number)] = {

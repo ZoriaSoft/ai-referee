@@ -40,6 +40,8 @@ export interface ReviewOptions {
   autoMerge?: boolean;
   /** Post the verdict + findings as a GitHub review on the PR (PR target only). */
   postComments?: boolean;
+  /** Post a GitHub commit status (pending → success/failure) on the PR head SHA. */
+  postStatus?: boolean;
   /** Max parse retries per chunk after the first attempt. */
   maxParseRetries?: number;
   /** Prompt profile override; defaults to config.profile ("strict"). */
@@ -128,6 +130,25 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     allFiles.filter((f) => config.exclude.some((p) => globMatch(p, f.path))).map((f) => f.path),
   );
   const files = allFiles.filter((f) => !excluded.has(f.path) && !f.isBinary);
+
+  // Commit status: "pending" marks the head while tests + review run; the
+  // final state lands after auto-merge so a failed merge reads "failure".
+  // Best-effort like comments — status problems never flip the verdict.
+  const statusWanted = opts.postStatus === true && target.pr !== undefined;
+  let statusState: "pending" | "success" | "failure" | null = null;
+  const statusNotes: string[] = [];
+  const postStatus = async (state: "pending" | "success" | "failure", description: string): Promise<void> => {
+    if (!statusWanted) return;
+    try {
+      await git.ghPostCommitStatus(opts.cwd, target.head, state, description);
+      statusState = state;
+      statusNotes.push(`${state} posted`);
+    } catch (err) {
+      statusNotes.push(`${state} post failed: ${(err as Error).message}`);
+    }
+  };
+  await postStatus("pending", `ai-referee reviewing PR #${target.pr}…`);
+
   const tests = await runTests(config, wt, opts.skipTests === true);
   const runProfile: ReviewProfile = opts.profile ?? config.profile;
   const byName = new Map(config.reviewers.map((r) => [r.name, buildReviewer(r)]));
@@ -230,6 +251,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     warnings,
     fix,
     comments: { requested: opts.postComments === true && target.pr !== undefined, posted: false, detail: null },
+    status: { requested: statusWanted, state: null, detail: null },
   };
 
   if (report.comments.requested && target.pr !== undefined) {
@@ -273,7 +295,36 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     }
   }
 
+  // Final commit status lands last: it must reflect the post-merge verdict,
+  // since a failed merge flips APPROVE to REJECT.
+  if (statusWanted) {
+    await postStatus(
+      report.verdict === "APPROVE" ? "success" : "failure",
+      statusDescription(report.verdict, report.reasons, report.summary, findings.length, report.tests),
+    );
+    report.status.state = statusState;
+    report.status.detail = statusNotes.join("; ");
+  }
+
   return report;
+}
+
+/**
+ * One-line description for the commit status (GitHub truncates at 140 chars).
+ * APPROVE carries findings/tests context; REJECT leads with the gate reason.
+ */
+export function statusDescription(
+  verdict: "APPROVE" | "REJECT",
+  reasons: string[],
+  summary: string,
+  findingCount: number,
+  tests: { ran: boolean; passed: boolean },
+): string {
+  const base =
+    verdict === "APPROVE"
+      ? `ai-referee approved — ${findingCount} finding(s), ${tests.ran ? "tests passed" : "tests skipped"}`
+      : `ai-referee rejected — ${reasons[0] ?? summary}`;
+  return base.slice(0, 140);
 }
 
 

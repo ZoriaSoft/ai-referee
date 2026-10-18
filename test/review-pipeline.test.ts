@@ -37,6 +37,7 @@ function cfg(overrides: Partial<Config>): Config {
     fixerTimeoutMs: 10_000,
     autoMerge: false,
     prComments: false,
+    commitStatus: false,
     reviewConcurrency: 1,
     profile: "strict",
     routes: [],
@@ -357,6 +358,96 @@ describe("runReview pipeline", () => {
       expect(report.verdict).toBe("APPROVE");
       expect(report.comments.posted).toBe(false);
       expect(report.comments.detail).toContain("post failed");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("posts pending then failure commit status on the PR head", async () => {
+    const remote = join(dir, "remote3.git");
+    await sh(`git init -q --bare '${remote}'`);
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/9/head ${featSha}`);
+
+    // Fake gh: answers `pr view`; every `gh api` call logs argv and captures
+    // its stdin body into a numbered file so call order can be asserted.
+    const fakebin = join(dir, "fakebin3");
+    await mkdir(fakebin);
+    const capDir = join(dir, "ghcap");
+    const capArgs = join(dir, "gh-args.txt");
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then\n` +
+        `  n=$(ls '${capDir}' 2>/dev/null | wc -l)\n` +
+        `  mkdir -p '${capDir}'\n` +
+        `  echo "$@" >> '${capArgs}'\n` +
+        `  cat > '${capDir}/body-'$n'.json'\n` +
+        `  echo '{}'; exit 0\n` +
+        `fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 9,
+        postStatus: true,
+        config: cfg({ reviewers: [{ name: "strict", type: "cli", command: echo(REJECT) }] }),
+      });
+      expect(report.verdict).toBe("REJECT");
+      expect(report.status.requested).toBe(true);
+      expect(report.status.state).toBe("failure");
+
+      const pending = JSON.parse(await readFile(join(capDir, "body-0.json"), "utf8"));
+      const final = JSON.parse(await readFile(join(capDir, "body-1.json"), "utf8"));
+      expect(pending.state).toBe("pending");
+      expect(pending.context).toBe("ai-referee");
+      expect(final.state).toBe("failure");
+      expect(final.context).toBe("ai-referee");
+      expect(final.description.length).toBeLessThanOrEqual(140);
+
+      const args = await readFile(capArgs, "utf8");
+      expect(args).toContain(`statuses/${featSha}`);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("keeps the verdict when status posting fails", async () => {
+    const remote = join(dir, "remote4.git");
+    await sh(`git init -q --bare '${remote}'`);
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/10/head ${featSha}`);
+
+    const fakebin = join(dir, "fakebin4");
+    await mkdir(fakebin);
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then echo 'Forbidden' >&2; exit 1; fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 10,
+        postStatus: true,
+        config: cfg({ reviewers: [{ name: "ok", type: "cli", command: echo(APPROVE) }] }),
+      });
+      expect(report.verdict).toBe("APPROVE");
+      expect(report.status.requested).toBe(true);
+      expect(report.status.state).toBeNull();
+      expect(report.status.detail).toContain("post failed");
     } finally {
       process.env.PATH = savedPath;
     }

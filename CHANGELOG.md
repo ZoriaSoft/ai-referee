@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased] — round 7 (2026-10-18)
+
+### Added
+
+- GitHub commit statuses: `commitStatus` config and `--status` on
+  `review`/`daemon` posts a `pending` status on the PR head SHA when the
+  review starts and `success`/`failure` with the verdict when it finishes
+  (context `ai-referee`, via `gh api .../statuses/<sha>`). Requiring that
+  context in branch protection makes the gate enforceable — merges block
+  until ai-referee approves. Posting is best-effort like PR comments:
+  failures land in `report.status.detail`, never flip the verdict; the
+  final state lands after auto-merge so a failed merge reads `failure`.
+  Markdown reports show a "Commit status" line.
+
 ## [Unreleased] — round 6 (2026-10-18)
 
 ### Added

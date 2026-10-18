@@ -242,3 +242,28 @@ export async function ghDismissPrReview(cwd: string, pr: number, reviewId: numbe
     throw new GitError(`gh api dismissals failed: ${res.stderr.trim() || res.stdout.trim()}`);
   }
 }
+
+/** Commit status states GitHub accepts; we only ever send these three. */
+export type GhStatusState = "pending" | "success" | "failure";
+
+/**
+ * Posts one commit status on `sha` through `gh api` (context "ai-referee").
+ * Branch protection can then require the context, turning the gate verdict
+ * into an enforced check. Descriptions are capped at 140 chars — the API
+ * truncates longer ones, which could cut mid-word.
+ */
+export async function ghPostCommitStatus(
+  cwd: string,
+  sha: string,
+  state: GhStatusState,
+  description: string,
+): Promise<void> {
+  const res = await run(`gh api repos/{owner}/{repo}/statuses/${sha} -X POST --input -`, {
+    cwd,
+    stdin: JSON.stringify({ state, context: "ai-referee", description: description.slice(0, 140) }),
+    timeoutMs: 30_000,
+  });
+  if (res.exitCode !== 0) {
+    throw new GitError(`gh api statuses failed: ${res.stderr.trim() || res.stdout.trim()}`);
+  }
+}

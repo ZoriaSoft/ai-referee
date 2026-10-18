@@ -45,6 +45,7 @@ function report(findings: Finding[], verdict: "APPROVE" | "REJECT" = "REJECT"): 
     warnings: [],
     fix: { requested: false, ran: false, detail: null },
     comments: { requested: true, posted: false, detail: null },
+    status: { requested: false, state: null, detail: null },
   };
 }
 

@@ -50,6 +50,11 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
   dosya seviyesi yoruma düşer, kalanlar review gövdesine girer. Yeni bir head
   incelendiğinde, eski commit'e ait ai-referee `CHANGES_REQUESTED` review'ları
   otomatik dismiss edilir; insan review'larına dokunulmaz.
+- `--status` (veya `"commitStatus": true`): PR head SHA'sına GitHub commit
+  status'u yazar — inceleme başlarken `pending`, sonunda `success`/`failure`
+  (context `ai-referee`). Branch protection'da bu context'i zorunlu kılarsan
+  kapı gerçekten uygulanır: ai-referee onaylamadan merge kapanmaz. Yazma
+  hataları verdict'i değiştirmez (best-effort).
 - `--confirm` (veya `"confirmRejections": true`): her REJECT, zincirdeki
   **ikinci hakeme** doğrulatılır — yargılayan hakem kendini onaylayamaz.
   İkinci hakem APPROVE derse ret kararı engellemek yerine uyarıya dönüşür;

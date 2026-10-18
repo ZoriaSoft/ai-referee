@@ -29,6 +29,7 @@ REVIEW OPTIONS
   --fix               one fixer round on REJECT, then re-review (local only)
   --merge             gh pr merge when the verdict is APPROVE (PR only)
   --comment           post the verdict + findings as a GitHub PR review (PR only)
+  --status            post a commit status (context "ai-referee") on the PR head (PR only)
   --confirm           verify each REJECT with a second referee before blocking
   --strict            strict profile: full review (default)
   --light             light profile: only merge-blocking problems may reject
@@ -42,6 +43,7 @@ DAEMON OPTIONS
   --once              single poll, then exit
   --merge             auto-merge PRs that pass the gate
   --comment           post each verdict as a GitHub PR review
+  --status            post each verdict as a commit status on the PR head
   --confirm           verify each REJECT with a second referee
   --fix               run one fixer round on REJECT (no-op for PR worktrees)
 
@@ -76,6 +78,10 @@ const STARTER_CONFIG = `{
   // Optional: post verdicts + anchored findings as GitHub PR reviews
   // (same as passing --comment; needs gh api access).
   // "prComments": true,
+
+  // Optional: post commit statuses (pending → success/failure) on the PR head
+  // SHA — branch protection can require the "ai-referee" context to merge.
+  // "commitStatus": true,
 
   // Chunks reviewed concurrently (1-8). Full changed-file bodies are
   // appended to prompts up to contextBudget chars (0 disables).
@@ -163,6 +169,7 @@ function parseCommon(rest: string[]) {
       concurrency: { type: "string" },
       once: { type: "boolean", default: false },
       comment: { type: "boolean", default: false },
+      status: { type: "boolean", default: false },
       confirm: { type: "boolean", default: false },
       strict: { type: "boolean", default: false },
       light: { type: "boolean", default: false },
@@ -211,7 +218,7 @@ async function cmdReview(rest: string[]): Promise<number> {
       fix: v.fix,
       autoMerge: v.merge,
       postComments: (v.comment || config.prComments) && pr !== undefined,
-      confirmRejections: v.confirm || undefined,
+      postStatus: (v.status || config.commitStatus) && pr !== undefined,
       profile: profileFromFlags(v) ?? undefined,
     });
   } catch (err) {
@@ -248,7 +255,7 @@ async function cmdDaemon(rest: string[]): Promise<number> {
     once: v.once,
     autoMerge: v.merge,
     postComments: v.comment || config.prComments,
-    fix: v.fix,
+    postStatus: v.status || config.commitStatus,
     confirmRejections: v.confirm || undefined,
     concurrency: v.concurrency ? Number.parseInt(v.concurrency, 10) : undefined,
     profile: profileFromFlags(v) ?? undefined,

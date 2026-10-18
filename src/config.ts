@@ -62,8 +62,10 @@ export interface Config {
   fixerTimeoutMs: number;
   /** Merge via `gh pr merge` when PR review approves. Default false. */
   autoMerge: boolean;
-  /** Post the verdict + findings as a GitHub review on PR targets. Default false. */
+  /** Post verdicts + anchored findings as GitHub PR reviews. Default false. */
   prComments: boolean;
+  /** Post a commit status (context "ai-referee") on the PR head SHA; branch protection can require it. Default false. */
+  commitStatus: boolean;
   /** Chunks reviewed concurrently. Default 2. */
   reviewConcurrency: number;
   /** Max chars of changed-file bodies appended to prompts for context. 0 disables. */
@@ -98,6 +100,7 @@ export const DEFAULT_CONFIG: Config = {
   fixerTimeoutMs: 10 * 60 * 1000,
   autoMerge: false,
   prComments: false,
+  commitStatus: false,
   reviewConcurrency: 2,
   contextBudget: 40_000,
   daemonIntervalSec: 120,
@@ -161,6 +164,7 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
   if ("fixerTimeoutMs" in raw) cfg.fixerTimeoutMs = num(raw.fixerTimeoutMs, "fixerTimeoutMs", path);
   if ("autoMerge" in raw) cfg.autoMerge = raw.autoMerge === true;
   if ("prComments" in raw) cfg.prComments = raw.prComments === true;
+  if ("commitStatus" in raw) cfg.commitStatus = raw.commitStatus === true;
   if ("reviewConcurrency" in raw) cfg.reviewConcurrency = num(raw.reviewConcurrency, "reviewConcurrency", path);
   if ("contextBudget" in raw) cfg.contextBudget = num(raw.contextBudget, "contextBudget", path);
   if ("daemonIntervalSec" in raw) cfg.daemonIntervalSec = num(raw.daemonIntervalSec, "daemonIntervalSec", path);

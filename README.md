@@ -56,6 +56,15 @@ never touched:
 npx ai-referee review --pr 137 --comment
 ```
 
+Post the verdict as a **commit status** on the PR head (`pending` while it
+runs, `success`/`failure` at the end, context `ai-referee`). Require that
+context in the repo's branch protection rules and the gate becomes
+enforceable — merges block until ai-referee approves:
+
+```bash
+npx ai-referee review --pr 137 --comment --status
+```
+
 Sanity-check the whole setup in one pass (config, reviewer binaries, API
 keys, `gh` auth):
 
@@ -132,6 +141,10 @@ Enable with `systemctl --user enable --now ai-referee.service`.
    `--comment` posts a GitHub PR review: APPROVE or REQUEST_CHANGES with
    findings anchored to diff lines as inline comments; findings that resolve
    to a changed file but no diff line are posted as file-level comments.
+   `--status` posts a commit status (context `ai-referee`): `pending` when
+   the review starts, `success`/`failure` for the final verdict — the state
+   branch protection can require. Both are best-effort and never flip the
+   verdict.
 
 ## Review profiles and path routing
 
@@ -230,6 +243,7 @@ When an `api` reviewer reports `usage`, token counts are summed into
 | `fixerTimeoutMs` | 600000 | Fixer timeout |
 | `autoMerge` | `false` | Allow `--merge`/`daemon --merge` |
 | `prComments` | `false` | Post verdict + anchored findings as a GitHub PR review |
+| `commitStatus` | `false` | Post `pending`/`success`/`failure` commit status (context `ai-referee`) on the PR head |
 | `daemonIntervalSec` | 120 | Daemon poll interval |
 | `confirmRejections` | `false` | Second referee verifies each REJECT (overruled → warning); `--confirm` per run |
 | `workdir` | `null` | Subdirectory for test/fix commands (monorepos) |
@@ -241,10 +255,10 @@ When an `api` reviewer reports `usage`, token counts are summed into
 
 ```
 ai-referee review [--pr N] [--base REF] [--uncommitted] [--fix] [--merge]
-                  [--comment] [--confirm] [--skip-tests] [--strict | --light]
-                  [--format md|json|both] [--out FILE]
-ai-referee daemon [--interval SEC] [--once] [--merge] [--comment] [--fix]
-                  [--confirm] [--strict | --light]
+                  [--comment] [--status] [--confirm] [--skip-tests]
+                  [--strict | --light] [--format md|json|both] [--out FILE]
+ai-referee daemon [--interval SEC] [--once] [--merge] [--comment] [--status]
+                  [--fix] [--confirm] [--strict | --light]
 ai-referee hook install
 ai-referee doctor
 ai-referee init

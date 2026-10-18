@@ -37,6 +37,9 @@ export function toMarkdown(report: GateReport): string {
   if (report.comments.requested) {
     lines.push(`**PR review:** ${report.comments.posted ? "posted" : "FAILED"} — ${report.comments.detail ?? ""}`);
   }
+  if (report.status.requested) {
+    lines.push(`**Commit status:** ${report.status.state ?? "not posted"} — ${report.status.detail ?? ""}`);
+  }
   lines.push("");
   lines.push(`**Summary:** ${report.summary}`);
 

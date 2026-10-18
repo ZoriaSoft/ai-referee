@@ -106,6 +106,16 @@ Owner decides.
       to a single-line comment. Posted as `start_line`/`start_side` on the
       GitHub review; report/comment bodies render `file:start-end`.
 
+
+## Done — round 7
+
+- [x] **GitHub commit statuses** (`commitStatus`, `--status`): `pending` on
+      the PR head when a review starts, `success`/`failure` with the verdict
+      at the end (context `ai-referee`). Branch protection can require the
+      context — the gate becomes enforceable, not just advisory. Best-effort:
+      post failures land in `report.status.detail`, never flip the verdict;
+      final state lands after auto-merge so a failed merge reads `failure`.
+
 ## Next (priority order)
 
 - [ ] **Route-aware fix round**: `fixerCommand` is global; findings could go
