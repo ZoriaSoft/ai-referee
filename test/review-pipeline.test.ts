@@ -715,6 +715,61 @@ describe("runReview pipeline", () => {
     }
   });
 
+  it("only dismisses marker reviews from the account that posted", async () => {
+    const remote = join(dir, "remote4.git");
+    await sh(`git init -q --bare '${remote}'`);
+    await sh(`git remote add origin '${remote}' && git push -q origin main feat && git fetch -q origin`);
+    const featSha = (await run("git rev-parse feat", { cwd: dir })).stdout.trim();
+    const mainSha = (await run("git rev-parse main", { cwd: dir })).stdout.trim();
+    await sh(`git -C '${remote}' update-ref refs/pull/9/head ${featSha}`);
+
+    // Stale reviews: one ours on the old head (dismiss), one ours on the new
+    // head (keep — it is the review we just posted), one human's (keep).
+    const staleList = JSON.stringify([
+      { id: 42, state: "CHANGES_REQUESTED", commit_id: mainSha, body: "ai-referee stuff <!-- ai-referee:review -->", user: { login: "bot" } },
+      { id: 43, state: "CHANGES_REQUESTED", commit_id: featSha, body: "fresh <!-- ai-referee:review -->", user: { login: "bot" } },
+      { id: 44, state: "CHANGES_REQUESTED", commit_id: mainSha, body: "quoted <!-- ai-referee:review -->", user: { login: "alice" } },
+    ]);
+
+    const fakebin = join(dir, "fakebin4");
+    await mkdir(fakebin);
+    const capDismissals = join(dir, "gh-dismissals4.txt");
+    const staleFile = join(dir, "gh-reviews4.json");
+    await writeFile(staleFile, staleList);
+    await writeFile(
+      join(fakebin, "gh"),
+      `#!/bin/sh\n` +
+        `if [ "$1" = "pr" ] && [ "$2" = "view" ]; then echo main; exit 0; fi\n` +
+        `if [ "$1" = "api" ]; then\n` +
+        `  case "$*" in\n` +
+        `    *" -X PUT"*) cat > /dev/null; echo "$2" >> '${capDismissals}'; echo '{}'; exit 0;;\n` +
+        `    *" -X POST"*) cat > /dev/null; echo '{"id":99,"user":{"login":"bot"}}'; exit 0;;\n` +
+        `    *reviews* ) cat '${staleFile}'; exit 0;;\n` +
+        `  esac\n` +
+        `fi\n` +
+        `exit 1`,
+    );
+    await chmod(join(fakebin, "gh"), 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakebin}:${savedPath}`;
+    try {
+      const report = await runReview({
+        cwd: dir,
+        pr: 9,
+        postComments: true,
+        config: cfg({ reviewers: [{ name: "ok", type: "cli", command: echo(APPROVE) }] }),
+      });
+      expect(report.comments.posted).toBe(true);
+      expect(report.comments.detail).toContain("dismissed 1 superseded review(s)");
+      const dismissals = (await readFile(capDismissals, "utf8")).trim();
+      expect(dismissals).toContain("pulls/9/reviews/42/dismissals");
+      expect(dismissals).not.toContain("reviews/43/dismissals");
+      expect(dismissals).not.toContain("reviews/44/dismissals");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
   it("second referee overrules a REJECT into a warning when --confirm", async () => {
     const report = await runReview({
       cwd: dir,

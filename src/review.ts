@@ -325,7 +325,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   if (report.comments.requested && target.pr !== undefined) {
     try {
       const { payload, fileComments } = buildPrReviewSet(report, allFiles);
-      await git.ghPostReview(opts.cwd, target.pr, payload);
+      const posted = await git.ghPostReview(opts.cwd, target.pr, payload);
       report.comments.posted = true;
       let detail = `posted ${payload.event} with ${payload.comments.length} inline comment(s)`;
       let filePosted = 0;
@@ -341,7 +341,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       if (filePosted) detail += ` + ${filePosted} file-level comment(s)`;
       if (fileFailed) detail += ` (${fileFailed} file comment(s) failed)`;
       try {
-        const dismissed = await dismissStaleReviews(opts.cwd, target.pr, target.head);
+        const dismissed = await dismissStaleReviews(opts.cwd, target.pr, target.head, reviewerLogin(posted));
         if (dismissed > 0) detail += `; dismissed ${dismissed} superseded review(s)`;
       } catch (err) {
         detail += `; stale-review cleanup failed: ${(err as Error).message}`;
@@ -797,16 +797,32 @@ async function runFixer(
   return res.stdout.trim().slice(0, 400) || "fixer completed";
 }
 
+/** Login of the account that created a review, from the POST response; null if unknown. */
+function reviewerLogin(postResponse: string): string | null {
+  try {
+    const login = (JSON.parse(postResponse) as { user?: { login?: unknown } }).user?.login;
+    return typeof login === "string" && login ? login : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Dismisses ai-referee CHANGES_REQUESTED reviews left on earlier commits —
  * otherwise a stale rejection keeps blocking the PR after the head moved.
  * Only reviews carrying our marker are touched; human reviews are never
  * dismissed. Returns the number dismissed.
  */
-async function dismissStaleReviews(cwd: string, pr: number, head: string): Promise<number> {
+async function dismissStaleReviews(cwd: string, pr: number, head: string, login: string | null): Promise<number> {
   const reviews = await git.ghListPrReviews(cwd, pr);
   const stale = reviews.filter(
-    (r) => r.state === "CHANGES_REQUESTED" && r.commit_id !== head && r.body.includes(REVIEW_MARKER),
+    (r) =>
+      r.state === "CHANGES_REQUESTED" &&
+      r.commit_id !== head &&
+      r.body.includes(REVIEW_MARKER) &&
+      // The marker is just text anyone can paste; when we know which account
+      // posted our review, only that account's reviews are ours to dismiss.
+      (login === null || r.user?.login === login),
   );
   let dismissed = 0;
   for (const r of stale) {
