@@ -28,13 +28,16 @@
     "dist",
     "README.md",
     "README.tr.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "test": "vitest run",
     "check": "tsc -p tsconfig.json --noEmit",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run check && npm run build && npm test"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
