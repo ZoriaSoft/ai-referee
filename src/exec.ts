@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 export interface ExecResult {
   exitCode: number;
@@ -50,6 +50,57 @@ export function runArgv(file: string, args: readonly string[], opts: ExecOptions
   return spawnCapture(file, [...args], opts);
 }
 
+/**
+ * Children still running. On POSIX each one leads its own process group
+ * (spawned detached), so a timeout or a signal can take down the whole tree
+ * — `bash -c "make test"` forks grandchildren that would otherwise outlive
+ * the shell, keep the output pipes open and stall the gate past its timeout.
+ */
+const active = new Set<ChildProcess>();
+const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+let signalsHooked = false;
+
+function killTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    if (signal === "SIGKILL") {
+      // taskkill /T walks the tree; best-effort, its own failure is ignored.
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
+    }
+    child.kill(signal);
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+/**
+ * Detached children no longer share our terminal's process group, so Ctrl-C
+ * would not reach them. Forward the common termination signals to every live
+ * child group; when nothing else listens, re-raise so the default exit still
+ * happens (the daemon installs its own graceful handlers).
+ */
+function hookSignals(): void {
+  if (signalsHooked) return;
+  signalsHooked = true;
+  for (const sig of FORWARDED_SIGNALS) {
+    const handler = (): void => {
+      for (const c of active) killTree(c, sig);
+      if (process.listenerCount(sig) === 1) {
+        process.removeListener(sig, handler);
+        process.kill(process.pid, sig);
+      }
+    };
+    process.on(sig, handler);
+  }
+  process.on("exit", () => {
+    for (const c of active) killTree(c, "SIGKILL");
+  });
+}
+
 function spawnCapture(file: string, args: string[], opts: ExecOptions): Promise<ExecResult> {
   const { promise, resolve } = Promise.withResolvers<ExecResult>();
   const max = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
@@ -60,18 +111,40 @@ function spawnCapture(file: string, args: string[], opts: ExecOptions): Promise<
     env: opts.env,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
+    detached: process.platform !== "win32",
   });
+  if (child.pid !== undefined) {
+    hookSignals();
+    active.add(child);
+  }
 
   let stdout = "";
   let stderr = "";
   let timedOut = false;
   let settled = false;
 
+  const finish = (result: ExecResult): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(killTimer);
+    active.delete(child);
+    resolve(result);
+  };
+
   const killTimer = setTimeout(() => {
     timedOut = true;
-    child.kill("SIGTERM");
+    killTree(child, "SIGTERM");
     setTimeout(() => {
-      if (!settled) child.kill("SIGKILL");
+      if (settled) return;
+      killTree(child, "SIGKILL");
+      // A descendant that escaped the group can still hold our pipes open;
+      // stop waiting for it rather than stalling past the timeout.
+      setTimeout(() => {
+        if (settled) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({ exitCode: child.exitCode ?? 1, stdout, stderr, timedOut: true });
+      }, 1000).unref();
     }, KILL_GRACE_MS).unref();
   }, timeoutMs);
   killTimer.unref();
@@ -86,17 +159,11 @@ function spawnCapture(file: string, args: string[], opts: ExecOptions): Promise<
   });
 
   child.on("error", (err) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(killTimer);
-    resolve({ exitCode: 127, stdout, stderr: stderr + String(err), timedOut: false });
+    finish({ exitCode: 127, stdout, stderr: stderr + String(err), timedOut: false });
   });
 
   child.on("close", (code) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(killTimer);
-    resolve({ exitCode: code ?? 1, stdout, stderr, timedOut });
+    finish({ exitCode: code ?? 1, stdout, stderr, timedOut });
   });
 
   if (opts.stdin !== undefined) {

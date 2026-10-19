@@ -55,6 +55,16 @@ describe("run / which on this platform", () => {
     expect(res.timedOut).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32")("kills grandchildren on timeout instead of waiting for them", async () => {
+    const started = Date.now();
+    // bash cannot exec the first command here, so `sh` is a grandchild that
+    // used to keep the pipes open until it finished on its own.
+    const res = await run('sh -c "sleep 20"; echo unreachable', { timeoutMs: 300 });
+    expect(res.timedOut).toBe(true);
+    expect(res.stdout).not.toContain("unreachable");
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
   it("truncates oversized output", async () => {
     const res = await run("yes x | head -c 1000000", { maxOutputBytes: 100 });
     expect(res.stdout.length).toBeLessThanOrEqual(140);
