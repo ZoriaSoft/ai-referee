@@ -10,6 +10,7 @@ const base = {
   base: "main",
   head: "feat",
   repoNote: null,
+  nonce: "0123abcd",
 };
 
 describe("buildReviewPrompt profiles", () => {

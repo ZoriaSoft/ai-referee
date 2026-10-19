@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { loadConfig, type Config } from "./config.js";
-import { run, which } from "./exec.js";
+import { runArgv, which } from "./exec.js";
 import { cliCommandBinary } from "./reviewer.js";
 
 export type CheckStatus = "ok" | "warn" | "fail";
@@ -38,7 +38,7 @@ export async function runDoctor(opts: {
     out(`[${ICONS[c.status]}] ${c.name} — ${c.detail}`);
   };
 
-  const root = await run("git rev-parse --show-toplevel", { cwd, timeoutMs: 15_000 });
+  const root = await runArgv("git", ["rev-parse", "--show-toplevel"], { cwd, timeoutMs: 15_000 });
   push(
     root.exitCode === 0
       ? { name: "git repository", status: "ok", detail: root.stdout.trim() }
@@ -110,7 +110,7 @@ export async function runDoctor(opts: {
   if (!gh) {
     push({ name: "gh CLI", status: "warn", detail: "not found — needed only for --pr/daemon/comments" });
   } else {
-    const auth = await run("gh auth status", { cwd, timeoutMs: 15_000 });
+    const auth = await runArgv("gh", ["auth", "status"], { cwd, timeoutMs: 15_000 });
     push(
       auth.exitCode === 0
         ? { name: "gh CLI", status: "ok", detail: `authenticated (${gh})` }

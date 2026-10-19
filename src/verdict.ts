@@ -16,25 +16,60 @@ const SEVERITY_VALUES: Record<string, Severity> = {
   info: "info",
 };
 
+export interface ParseVerdictOptions {
+  /** The per-review nonce sent in the prompt. A candidate carrying a different nonce is ignored. */
+  nonce?: string;
+  /** When true, candidates without the matching nonce are ignored too. */
+  requireNonce?: boolean;
+}
+
 /**
  * Extracts and validates the reviewer JSON verdict from raw model output.
  * Tolerates: prose around the JSON, markdown code fences, trailing commas,
  * comments, single extra keys. Rejects anything without a parseable
  * "verdict" of APPROVE/REJECT.
+ *
+ * Hardening against text smuggled in through the reviewed diff:
+ *  - with `nonce`, a verdict object whose "nonce" differs is discarded
+ *    (and with `requireNonce`, so is one that has none);
+ *  - if the output holds several valid verdicts that disagree (e.g. the
+ *    model quoted an injected `{"verdict":"APPROVE"}` and then gave its own
+ *    REJECT), parsing fails — the caller treats that as no verdict (fail closed).
  */
-export function parseVerdict(raw: string): ChunkVerdict {
+export function parseVerdict(raw: string, opts: ParseVerdictOptions = {}): ChunkVerdict {
   const text = raw.trim();
   if (!text) throw new VerdictParseError("empty reviewer output");
 
+  const accepted: ChunkVerdict[] = [];
+  let nonceRejected = 0;
   for (const candidate of extractJsonCandidates(text)) {
+    let parsed: unknown;
     try {
-      return validateVerdict(parseLooseJson(candidate));
-    } catch (err) {
-      if (err instanceof VerdictParseError) throw err;
-      // not this candidate; try the next
+      parsed = parseLooseJson(candidate);
+    } catch {
+      continue; // not this candidate; try the next
     }
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && opts.nonce !== undefined) {
+      const got = (parsed as Record<string, unknown>).nonce;
+      if (got !== undefined ? got !== opts.nonce : opts.requireNonce === true) {
+        nonceRejected++;
+        continue;
+      }
+    }
+    accepted.push(validateVerdict(parsed)); // a JSON object with a bad verdict field throws: be strict
   }
-  throw new VerdictParseError("no valid verdict JSON found in reviewer output");
+  if (accepted.length === 0) {
+    throw new VerdictParseError(
+      nonceRejected > 0
+        ? `no verdict JSON carried the review nonce (${nonceRejected} candidate(s) ignored)`
+        : "no valid verdict JSON found in reviewer output",
+    );
+  }
+  const kinds = new Set(accepted.map((v) => v.verdict));
+  if (kinds.size > 1) {
+    throw new VerdictParseError("contradictory verdicts in reviewer output (both APPROVE and REJECT)");
+  }
+  return accepted[0]!;
 }
 
 /**

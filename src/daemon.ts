@@ -99,8 +99,10 @@ export async function runDaemon(opts: DaemonOptions): Promise<number> {
             (report.status.requested ? `; status: ${report.status.detail ?? "none"}` : ""),
         );
         await writeReport(cwd, pr.number, report);
+        // Record the SHA actually reviewed: a push between `gh pr list` and
+        // the fetch means the listed head was never looked at.
         state.reviewed[String(pr.number)] = {
-          sha: pr.headRefOid,
+          sha: report.target.reviewedSha ?? pr.headRefOid,
           verdict: report.verdict,
           at: new Date().toISOString(),
         };

@@ -162,7 +162,7 @@ describe("daemon state file", () => {
   });
 
   it("writes no state and leaves no tmp files when every review fails", async () => {
-    await fakeGh(`[{"number":7,"title":"x","headRefOid":"deadbeef"}]`);
+    await fakeGh(`[{"number":7,"title":"x","headRefOid":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}]`);
     const logs: string[] = [];
     const code = await runDaemon({
       cwd: dir,

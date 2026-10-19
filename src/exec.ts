@@ -35,15 +35,31 @@ export function shellCommand(platform: NodeJS.Platform = process.platform): stri
  * and captures output. Never rejects: every outcome is a result object.
  */
 export function run(command: string, opts: ExecOptions = {}): Promise<ExecResult> {
+  const [shell, ...shellArgs] = shellCommand();
+  return spawnCapture(shell!, [...shellArgs, command], opts);
+}
+
+/**
+ * Runs `file` with an explicit argv — no shell is involved, so arguments are
+ * never re-parsed and cannot inject commands. Use this for every call whose
+ * arguments carry data (PR numbers, refs, SHAs, paths). `run` is reserved for
+ * command lines the user wrote in their own config (tests, reviewers, fixer).
+ * Never rejects: a missing binary resolves with exit code 127.
+ */
+export function runArgv(file: string, args: readonly string[], opts: ExecOptions = {}): Promise<ExecResult> {
+  return spawnCapture(file, [...args], opts);
+}
+
+function spawnCapture(file: string, args: string[], opts: ExecOptions): Promise<ExecResult> {
   const { promise, resolve } = Promise.withResolvers<ExecResult>();
   const max = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  const [shell, ...shellArgs] = shellCommand();
-  const child = spawn(shell!, [...shellArgs, command], {
+  const child = spawn(file, args, {
     cwd: opts.cwd,
     env: opts.env,
     stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
   });
 
   let stdout = "";
@@ -147,4 +163,21 @@ function cmdEscape(s: string): string {
   }
   out += "\\".repeat(backslashes * 2);
   return '"' + out + '"';
+}
+
+/**
+ * Env var names that look like credentials. PR-mode test runs execute code
+ * from the pull request, so these are stripped from their environment unless
+ * the config opts back in (`passSecretsToTests`).
+ */
+const SECRET_ENV_RE =
+  /(TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL|AUTH|SESSION|COOKIE)/i;
+
+/** Copy of `env` without credential-looking variables (see SECRET_ENV_RE). */
+export function scrubSecretEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (!SECRET_ENV_RE.test(k)) out[k] = v;
+  }
+  return out;
 }

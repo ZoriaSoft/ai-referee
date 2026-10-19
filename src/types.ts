@@ -85,6 +85,8 @@ export interface GateReport {
     base: string;
     head: string;
     pr?: number;
+    /** Exact commit SHA that the diff, tests and review were bound to (absent for uncommitted local reviews). */
+    reviewedSha?: string;
   };
   stats: {
     filesChanged: number;

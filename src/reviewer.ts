@@ -35,6 +35,15 @@ export function cliCommandBinary(command: string): string | null {
   return /^[A-Za-z0-9_./-]+$/.test(firstWord) ? firstWord : null;
 }
 
+/**
+ * Inline `{prompt}` substitution is unsafe on Windows: cmd.exe does not honour
+ * backslash-escaped quotes and expands %VAR% inside quotes, so diff text could
+ * break out of the argument. Use `{prompt_file}` or stdin there.
+ */
+export function inlinePromptUnsafe(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "win32";
+}
+
 const REVIEWER_TIMEOUT_DEFAULT = 10 * 60 * 1000;
 const API_TIMEOUT_DEFAULT = 300_000;
 
@@ -53,6 +62,14 @@ function cliReviewer(cfg: ReviewerConfig): Reviewer {
     name: cfg.name,
     async invoke(prompt, cwd) {
       const started = Date.now();
+      if (usesInline && inlinePromptUnsafe()) {
+        return {
+          ok: false,
+          output: "",
+          detail: "{prompt} inline substitution is disabled on Windows (unsafe quoting); use {prompt_file} or stdin",
+          durationMs: 0,
+        };
+      }
       // A missing binary is the most common "unavailable" cause; check cheaply.
       if (bin !== null) {
         const found = await which(bin, cwd);

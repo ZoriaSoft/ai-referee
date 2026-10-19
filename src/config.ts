@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { parseLooseJson } from "./loose-json.js";
 
 export const CONFIG_FILENAME = ".ai-referee.json";
@@ -80,6 +80,24 @@ export interface Config {
   confirmRejections: boolean;
   /** Working directory for test/fix commands relative to repo root. */
   workdir: string | null;
+  /**
+   * Require reviewers to echo the per-review nonce in their verdict JSON.
+   * Verdict objects without it (e.g. JSON smuggled in through the diff and
+   * echoed by the model) are ignored. Default true.
+   */
+  requireNonce: boolean;
+  /**
+   * Where cli reviewers run for PR targets: "isolated" (default) — an empty
+   * temp dir, so agent CLIs cannot read or execute instruction files from the
+   * PR (AGENTS.md, CLAUDE.md, hooks…); "worktree" — inside the PR checkout.
+   * Local reviews always run in the repo.
+   */
+  reviewerWorkdir: "isolated" | "worktree";
+  /**
+   * PR targets only: pass credential-looking env vars (…TOKEN, …API_KEY,
+   * …SECRET, …) to the test command. Default false — tests execute PR code.
+   */
+  passSecretsToTests: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -109,6 +127,9 @@ export const DEFAULT_CONFIG: Config = {
   daemonConcurrency: 1,
   confirmRejections: false,
   workdir: null,
+  requireNonce: true,
+  reviewerWorkdir: "isolated",
+  passSecretsToTests: false,
 };
 
 export class ConfigError extends Error {}
@@ -173,6 +194,14 @@ function mergeConfig(raw: Record<string, unknown>, path: string): Config {
   if ("daemonConcurrency" in raw) cfg.daemonConcurrency = num(raw.daemonConcurrency, "daemonConcurrency", path);
   if ("confirmRejections" in raw) cfg.confirmRejections = raw.confirmRejections === true;
   if ("workdir" in raw) cfg.workdir = raw.workdir === null ? null : str(raw.workdir, "workdir", path);
+  if ("requireNonce" in raw) cfg.requireNonce = raw.requireNonce !== false;
+  if ("reviewerWorkdir" in raw) {
+    if (raw.reviewerWorkdir !== "isolated" && raw.reviewerWorkdir !== "worktree") {
+      throw new ConfigError(`${path}: "reviewerWorkdir" must be "isolated" or "worktree"`);
+    }
+    cfg.reviewerWorkdir = raw.reviewerWorkdir;
+  }
+  if ("passSecretsToTests" in raw) cfg.passSecretsToTests = raw.passSecretsToTests === true;
   return cfg;
 }
 
@@ -259,6 +288,9 @@ function validateConfig(cfg: Config, path: string): void {
         throw new ConfigError(`${path}: route "${label}" references unknown reviewer "${n}"`);
       }
     }
+  }
+  if (cfg.workdir !== null && (isAbsolute(cfg.workdir) || cfg.workdir.split(/[\\/]/).includes(".."))) {
+    throw new ConfigError(`${path}: "workdir" must be a relative path inside the repo`);
   }
   if (cfg.chunkBudget < 4_000) {
     throw new ConfigError(`${path}: "chunkBudget" must be at least 4000 chars`);

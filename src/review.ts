@@ -1,12 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config } from "./config.js";
+import { CONFIG_FILENAME, type Config } from "./config.js";
 import { globMatch, parseDiff, type DiffChunk, type FileDiff } from "./diff.js";
-import { run } from "./exec.js";
+import { run, scrubSecretEnv } from "./exec.js";
 import * as git from "./git.js";
 import { buildPrReviewSet, REVIEW_MARKER } from "./comments.js";
-import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, repoNoteSnippet } from "./prompt.js";
+import { buildFixPrompt, buildParseRetryPrompt, buildReviewPrompt, newNonce, repoNoteSnippet } from "./prompt.js";
 import { buildReviewer, invokeChain, type Reviewer } from "./reviewer.js";
 import { chunkFilesByRoute, planForFile, type ReviewPlan } from "./routing.js";
 import type { ChunkResult, Finding, GateReport, ReviewProfile, TestResult, TokenUsage } from "./types.js";
@@ -15,7 +15,10 @@ import { parseVerdict, VerdictParseError } from "./verdict.js";
 export interface ReviewTarget {
   kind: "local" | "pr";
   base: string;
+  /** Full commit SHA under review; for uncommitted local reviews a "<branch> (worktree)" label. */
   head: string;
+  /** True when `head` is an exact commit SHA that diff, tests and review are bound to. */
+  pinned: boolean;
   pr?: number;
   /** Directory the diff/tests/fix run against. */
   worktree: string;
@@ -61,7 +64,9 @@ export async function resolveTarget(opts: {
 }): Promise<ReviewTarget> {
   const { cwd, base, pr, includeUncommitted } = opts;
 
+  if (base !== undefined) git.assertRef(base);
   if (pr !== undefined) {
+    git.assertPrNumber(pr);
     const headSha = await git.fetchPrHead(cwd, pr);
     const ghBase = await git.ghPrBase(cwd, pr);
     const resolvedBase = base ?? (ghBase ? `origin/${ghBase}` : await git.defaultBase(cwd));
@@ -71,6 +76,7 @@ export async function resolveTarget(opts: {
       kind: "pr",
       base: resolvedBase,
       head: headSha,
+      pinned: true,
       pr,
       worktree: dir,
       tempWorktree: true,
@@ -83,6 +89,7 @@ export async function resolveTarget(opts: {
     kind: "local",
     base: resolvedBase,
     head,
+    pinned: !includeUncommitted,
     worktree: cwd,
     tempWorktree: false,
   };
@@ -116,10 +123,13 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   const { config } = opts;
   const wt = target.worktree;
 
+  // Bound to the exact SHA: what the reviewer sees is what tests ran on and
+  // what auto-merge is allowed to merge (--match-head-commit).
   const rawDiff = await git.diffAgainst(
     wt,
     target.base,
-    target.kind === "local" && opts.includeUncommitted === true,
+    !target.pinned,
+    target.pinned ? target.head : "HEAD",
   );
   if (!rawDiff.trim()) {
     throw new ReviewError(`empty diff between ${target.base} and ${target.head} — nothing to review`);
@@ -130,6 +140,12 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     allFiles.filter((f) => config.exclude.some((p) => globMatch(p, f.path))).map((f) => f.path),
   );
   const files = allFiles.filter((f) => !excluded.has(f.path) && !f.isBinary);
+  const preWarnings: string[] = [];
+  if (target.kind === "pr" && allFiles.some((f) => f.path === CONFIG_FILENAME || f.path.endsWith(`/${CONFIG_FILENAME}`))) {
+    preWarnings.push(
+      `PR changes ${CONFIG_FILENAME} — ignored: the gate ran with the local (trusted) config, not the PR's`,
+    );
+  }
 
   // Commit status: "pending" marks the head while tests + review run; the
   // final state lands after auto-merge so a failed merge reads "failure".
@@ -149,11 +165,24 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   };
   await postStatus("pending", `ai-referee reviewing PR #${target.pr}…`);
 
-  const tests = await runTests(config, wt, opts.skipTests === true);
+  // PR tests execute code from the pull request: strip credential-looking env
+  // vars unless the (trusted, local) config explicitly opts back in.
+  const testEnv = target.kind === "pr" && !config.passSecretsToTests ? scrubSecretEnv() : undefined;
+  const tests = await runTests(config, wt, opts.skipTests === true, testEnv);
+  const integrity = target.pinned ? await checkWorktreeIntegrity(target) : null;
   const runProfile: ReviewProfile = opts.profile ?? config.profile;
   const byName = new Map(config.reviewers.map((r) => [r.name, buildReviewer(r)]));
   const defaultChain = config.reviewers.map((r) => byName.get(r.name)!);
-  const repoNote = await repoNoteSnippet(await readOptional(join(wt, "README.md")));
+  // README context comes from the trusted local checkout, never from the PR.
+  const repoNote = await repoNoteSnippet(await readOptional(join(opts.cwd, "README.md")));
+  // PR reviewers run in an empty dir by default: agent CLIs auto-load
+  // instruction files (AGENTS.md, CLAUDE.md…) from their cwd, and in a PR
+  // worktree those are written by the PR author.
+  const isolatedDir =
+    target.kind === "pr" && config.reviewerWorkdir === "isolated"
+      ? await mkdtemp(join(tmpdir(), "ai-referee-reviewer-"))
+      : null;
+  try {
 
   const reviewed = await reviewChunks({
     files,
@@ -163,6 +192,9 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     target,
     repoNote,
     worktree: wt,
+    reviewerCwd: isolatedDir ?? wt,
+    contextSha: target.pinned ? target.head : null,
+    requireNonce: config.requireNonce,
     maxParseRetries: opts.maxParseRetries ?? 1,
     concurrency: config.reviewConcurrency,
     contextBudget: config.contextBudget,
@@ -174,6 +206,11 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
 
   let findings = aggregateFindings(reviewed);
   let { verdict, reasons, warnings } = decideVerdict(reviewed, tests, config.reviewers.length === 0);
+  if (integrity) {
+    reasons.push(integrity);
+    verdict = "REJECT";
+  }
+  warnings.unshift(...preWarnings);
 
   const fix = { requested: opts.fix === true, ran: false, detail: null as string | null };
   const fixGroups = partitionFindingsByFixer(findings, config, runProfile);
@@ -211,6 +248,9 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       target,
       repoNote,
       worktree: wt,
+      reviewerCwd: wt,
+      contextSha: null, // the fixer edited the worktree; read bodies from disk
+      requireNonce: config.requireNonce,
       maxParseRetries: opts.maxParseRetries ?? 1,
       concurrency: config.reviewConcurrency,
       contextBudget: config.contextBudget,
@@ -219,12 +259,12 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       confirmRejections: opts.confirmRejections ?? config.confirmRejections,
       round: 2,
     });
-    const reTests = await runTests(config, wt, false);
+    const reTests = await runTests(config, wt, false, testEnv);
     findings = aggregateFindings(reReviewed);
     const decided = decideVerdict(reReviewed, reTests, false);
     verdict = decided.verdict;
     reasons = decided.reasons;
-    warnings = decided.warnings;
+    warnings = [...preWarnings, ...decided.warnings];
     reviewed.length = 0;
     reviewed.push(...reReviewed);
     tests.passed = reTests.passed;
@@ -244,6 +284,7 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
       base: target.base,
       head: target.head,
       ...(target.pr !== undefined ? { pr: target.pr } : {}),
+      ...(target.pinned ? { reviewedSha: target.head } : {}),
     },
     stats: {
       filesChanged: allFiles.length,
@@ -266,6 +307,20 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     comments: { requested: opts.postComments === true && target.pr !== undefined, posted: false, detail: null },
     status: { requested: statusWanted, state: null, detail: null },
   };
+
+  // Auto-merge preconditions are checked before anything is posted, so a
+  // refused merge never leaves an APPROVE review behind. Merge only the exact
+  // commit that was tested and reviewed; without a test run there is nothing
+  // to bind "tested" to, so refuse.
+  if (opts.autoMerge && report.verdict === "APPROVE" && target.pr !== undefined) {
+    if (!target.pinned || fix.ran) {
+      report.verdict = "REJECT";
+      report.reasons.push("auto-merge refused: the reviewed state is not a single pinned commit");
+    } else if (!report.tests.ran) {
+      report.verdict = "REJECT";
+      report.reasons.push("auto-merge refused: tests did not run on the reviewed commit (set testCommand, drop --skip-tests)");
+    }
+  }
 
   if (report.comments.requested && target.pr !== undefined) {
     try {
@@ -298,14 +353,14 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
     }
   }
 
-  if (opts.autoMerge && verdict === "APPROVE" && target.pr !== undefined) {
-    try {
-      const out = await git.ghMergePr(opts.cwd, target.pr);
-      report.reasons.push(`auto-merged PR #${target.pr}: ${out}`);
-    } catch (err) {
-      report.verdict = "REJECT";
-      report.reasons.push(`auto-merge failed: ${(err as Error).message}`);
-    }
+  if (opts.autoMerge && report.verdict === "APPROVE" && target.pr !== undefined) {
+      try {
+        const out = await git.ghMergePr(opts.cwd, target.pr, target.head);
+        report.reasons.push(`auto-merged PR #${target.pr} at ${target.head.slice(0, 12)}: ${out}`);
+      } catch (err) {
+        report.verdict = "REJECT";
+        report.reasons.push(`auto-merge failed: ${(err as Error).message}`);
+      }
   }
 
   // Final commit status lands last: it must reflect the post-merge verdict,
@@ -320,6 +375,30 @@ async function runReviewOnTarget(opts: ReviewOptions, target: ReviewTarget): Pro
   }
 
   return report;
+  } finally {
+    if (isolatedDir) await rm(isolatedDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * After the test run, the PR worktree must still be exactly the reviewed
+ * commit: same HEAD, no modified tracked files. Test code from the PR could
+ * otherwise check out or rewrite files so the gate approves something else.
+ * Returns a REJECT reason, or null when intact.
+ */
+async function checkWorktreeIntegrity(target: ReviewTarget): Promise<string | null> {
+  try {
+    const head = await git.headSha(target.worktree);
+    if (head !== target.head) {
+      return `worktree HEAD moved during tests (${target.head.slice(0, 12)} → ${head.slice(0, 12)}) — refusing to approve`;
+    }
+    if (target.kind === "pr" && (await git.hasUncommittedChanges(target.worktree))) {
+      return "tests modified tracked files in the PR worktree — refusing to approve";
+    }
+    return null;
+  } catch (err) {
+    return `could not verify the reviewed commit after tests: ${(err as Error).message}`;
+  }
 }
 
 /**
@@ -350,20 +429,27 @@ async function readOptional(path: string): Promise<string | null> {
   }
 }
 
-async function runTests(config: Config, worktree: string, skip: boolean): Promise<TestResult> {
+async function runTests(
+  config: Config,
+  worktree: string,
+  skip: boolean,
+  env?: NodeJS.ProcessEnv,
+): Promise<TestResult> {
   if (skip || !config.testCommand) {
     return { ran: false, command: config.testCommand, passed: true, outputTail: "" };
   }
   const res = await run(config.testCommand, {
     cwd: config.workdir ? join(worktree, config.workdir) : worktree,
     timeoutMs: config.testTimeoutMs,
+    env,
   });
   const combined = `${res.stdout}\n${res.stderr}`.trim();
   return {
     ran: true,
     command: config.testCommand,
     passed: res.exitCode === 0 && !res.timedOut,
-    outputTail: combined.split("\n").slice(-30).join("\n"),
+    outputTail: (res.timedOut ? `[timed out after ${config.testTimeoutMs} ms]\n` : "") +
+      combined.split("\n").slice(-30).join("\n"),
   };
 }
 
@@ -375,6 +461,11 @@ async function reviewChunks(opts: {
   target: ReviewTarget;
   repoNote: string | null;
   worktree: string;
+  /** cwd for reviewer processes (an empty dir for isolated PR reviews). */
+  reviewerCwd: string;
+  /** When set, context file bodies are read from this commit, not the disk. */
+  contextSha: string | null;
+  requireNonce: boolean;
   maxParseRetries: number;
   concurrency: number;
   contextBudget: number;
@@ -384,7 +475,7 @@ async function reviewChunks(opts: {
   confirmRejections: boolean;
   round: number;
 }): Promise<ChunkResult[]> {
-  const { files, byName, defaultChain, runProfile, target, repoNote, worktree, maxParseRetries, concurrency, contextBudget, confirmRejections, round } = opts;
+  const { files, byName, defaultChain, runProfile, target, repoNote, worktree, reviewerCwd, contextSha, requireNonce, maxParseRetries, concurrency, contextBudget, confirmRejections, round } = opts;
 
   // Plan per file (route match → reviewer subset, profile, instructions),
   // then chunk so routed and unrouted files never share a prompt.
@@ -417,8 +508,13 @@ async function reviewChunks(opts: {
       return result;
     }
 
-    const { files: contextFiles, skipped: contextSkipped } = await gatherContext(chunk.files, worktree, contextBudget);
-    let prompt = buildReviewPrompt({
+    const { files: contextFiles, skipped: contextSkipped } = await gatherContext(chunk.files, worktree, contextBudget, contextSha);
+    // Fresh unguessable nonce per chunk: fences the untrusted diff in the
+    // prompt and must come back inside the verdict JSON.
+    const nonce = newNonce();
+    const parseOpts = { nonce, requireNonce };
+    const basePrompt = buildReviewPrompt({
+      nonce,
       index: chunk.index,
       files: result.files,
       patch: chunk.patch,
@@ -432,9 +528,10 @@ async function reviewChunks(opts: {
       contextFiles,
       contextSkipped,
     });
+    let prompt = basePrompt;
 
     for (let attempt = 0; attempt <= maxParseRetries; attempt++) {
-      const tried = await invokeChain(chain, prompt, worktree);
+      const tried = await invokeChain(chain, prompt, reviewerCwd);
       result.attempts.push(...tried.attempts);
       if (!tried.response) {
         const where = plan.route ? ` for route "${plan.route}"` : "";
@@ -442,7 +539,7 @@ async function reviewChunks(opts: {
         break;
       }
       try {
-        result.parsed = parseVerdict(tried.response.output);
+        result.parsed = parseVerdict(tried.response.output, parseOpts);
         result.failedReason = null;
         break;
       } catch (err) {
@@ -450,7 +547,9 @@ async function reviewChunks(opts: {
         if (attempt === maxParseRetries) {
           result.failedReason = `unparseable verdict after ${attempt + 1} attempt(s): ${why}`;
         } else {
-          prompt = buildParseRetryPrompt(why);
+          // Re-send the full prompt: stateless CLI reviewers have no memory
+          // of the diff, and a bare "reply again" would invite a blind verdict.
+          prompt = `${basePrompt}\n\n${buildParseRetryPrompt(why, nonce)}`;
         }
       }
     }
@@ -471,7 +570,9 @@ async function reviewChunks(opts: {
           findings: [],
         };
       } else {
+        const confirmNonce = newNonce();
         const confirmPrompt = buildReviewPrompt({
+          nonce: confirmNonce,
           index: chunk.index,
           files: result.files,
           patch: chunk.patch,
@@ -490,7 +591,7 @@ async function reviewChunks(opts: {
             findings: result.parsed.findings,
           },
         });
-        const checked = await invokeChain(confirmChain, confirmPrompt, worktree);
+        const checked = await invokeChain(confirmChain, confirmPrompt, reviewerCwd);
         result.attempts.push(...checked.attempts.map((a) => ({ ...a, phase: "confirm" as const })));
         if (!checked.response) {
           result.confirmation = {
@@ -503,7 +604,7 @@ async function reviewChunks(opts: {
         } else {
           const confirmer = checked.attempts[checked.attempts.length - 1]!.reviewer;
           try {
-            const parsed = parseVerdict(checked.response.output);
+            const parsed = parseVerdict(checked.response.output, { nonce: confirmNonce, requireNonce });
             result.confirmation = {
               reviewer: confirmer,
               verdict: parsed.verdict,
@@ -548,6 +649,7 @@ async function gatherContext(
   files: FileDiff[],
   worktree: string,
   budget: number,
+  sha: string | null,
 ): Promise<{ files: { path: string; content: string }[]; skipped: string[] }> {
   const out: { path: string; content: string }[] = [];
   const skipped: string[] = [];
@@ -555,7 +657,9 @@ async function gatherContext(
   let left = budget;
   for (const f of files) {
     if (f.isDeleted || f.isBinary) continue;
-    const content = await readOptional(join(worktree, f.path));
+    const content = sha
+      ? await git.readFileAtCommit(worktree, sha, f.path)
+      : await readOptional(join(worktree, f.path));
     if (content === null) continue;
     const text = content.length <= left ? content : content.slice(0, left) + "\n[... truncated for context budget ...]";
     out.push({ path: f.path, content: text });

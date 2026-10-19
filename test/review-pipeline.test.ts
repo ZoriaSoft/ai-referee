@@ -46,6 +46,11 @@ function cfg(overrides: Partial<Config>): Config {
     daemonConcurrency: 1,
     confirmRejections: false,
     workdir: null,
+    // These fixtures answer with static JSON; nonce enforcement has its own
+    // tests in security.test.ts.
+    requireNonce: false,
+    reviewerWorkdir: "isolated",
+    passSecretsToTests: false,
     ...overrides,
   };
 }

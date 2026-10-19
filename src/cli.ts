@@ -28,7 +28,7 @@ REVIEW OPTIONS
   --base <ref>        diff base (default: upstream, else origin's default branch)
   --uncommitted       include uncommitted working-tree changes
   --fix               one fixer round on REJECT, then re-review (local only)
-  --merge             gh pr merge when the verdict is APPROVE (PR only)
+  --merge             merge on APPROVE, only the reviewed SHA (PR only)
   --comment           post the verdict + findings as a GitHub PR review (PR only)
   --status            post a commit status (context "ai-referee") on the PR head (PR only)
   --confirm           verify each REJECT with a second referee before blocking
@@ -106,6 +106,11 @@ const STARTER_CONFIG = `{
   // chain; an overruled rejection warns instead of blocking (needs 2+
   // reviewers). "jsonMode": true on api reviewers asks for strict JSON.
   // "confirmRejections": true,
+
+  // Security defaults (see README "Security model"): verdicts must echo the
+  // per-review nonce; PR reviewers run in an empty dir; PR tests get no
+  // credential-looking env vars. Loosen only for trusted contributors.
+  // "requireNonce": true, "reviewerWorkdir": "isolated", "passSecretsToTests": false,
 
   "chunkBudget": 100000,
   "exclude": ["*.lock", "package-lock.json", "dist/**", "*.min.js"]
@@ -207,8 +212,9 @@ async function cmdReview(rest: string[]): Promise<number> {
   const cwd = process.cwd();
   const config = await loadOrDie(cwd, v.config);
   const format = v.format || (process.stdout.isTTY ? "markdown" : "json");
-  const pr = v.pr !== undefined ? Number.parseInt(v.pr, 10) : undefined;
-  if (v.pr !== undefined && (!Number.isFinite(pr) || pr! <= 0)) {
+  // Digits only: "7abc" or "7;id" must not slip through parseInt.
+  const pr = v.pr !== undefined && /^[1-9][0-9]{0,9}$/.test(v.pr) ? Number(v.pr) : undefined;
+  if (v.pr !== undefined && pr === undefined) {
     process.stderr.write(`invalid --pr value: ${v.pr}\n`);
     return 2;
   }
@@ -255,12 +261,12 @@ async function cmdDaemon(rest: string[]): Promise<number> {
   const { values: v } = parseCommon(rest);
   const cwd = process.cwd();
   const config = await loadOrDie(cwd, v.config);
-  if (v.interval !== undefined && !Number.isFinite(Number.parseInt(v.interval, 10))) {
+  if (v.interval !== undefined && !/^[0-9]{1,7}$/.test(v.interval)) {
     process.stderr.write(`invalid --interval value: ${v.interval}\n`);
     return 2;
   }
   if (v.concurrency !== undefined) {
-    const n = Number.parseInt(v.concurrency, 10);
+    const n = /^[0-9]$/.test(v.concurrency) ? Number(v.concurrency) : Number.NaN;
     if (!Number.isFinite(n) || n < 1 || n > 8) {
       process.stderr.write(`invalid --concurrency value: ${v.concurrency} (1–8)\n`);
       return 2;
