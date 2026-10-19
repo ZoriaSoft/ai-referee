@@ -182,3 +182,16 @@ describe("parseVerdict adversarial input", () => {
     expect(parseVerdict(`${real}\n${injected}`, { nonce: N }).verdict).toBe("REJECT");
   });
 });
+
+describe("severity synonyms", () => {
+  it("maps critical/high/medium/low scales onto the gate's severities", () => {
+    const mk = (severity: string) =>
+      parseVerdict(JSON.stringify({ verdict: "REJECT", findings: [{ file: "a.ts", severity, message: "m" }] }))
+        .findings[0]!.severity;
+    expect(mk("Critical")).toBe("blocker");
+    expect(mk(" HIGH ")).toBe("major");
+    expect(mk("medium")).toBe("minor");
+    expect(mk("low")).toBe("info");
+    expect(mk("weird")).toBe("minor");
+  });
+});

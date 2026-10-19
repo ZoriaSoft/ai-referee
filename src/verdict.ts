@@ -9,11 +9,28 @@ export class VerdictParseError extends Error {
   }
 }
 
+/**
+ * Accepted severity words. Models often answer in other scales
+ * (critical/high/medium/low); mapping them matters because the light
+ * profile only blocks on "blocker" — a "critical" finding read as "minor"
+ * would turn a real rejection into a warning.
+ */
 const SEVERITY_VALUES: Record<string, Severity> = {
   blocker: "blocker",
+  critical: "blocker",
+  fatal: "blocker",
+  severe: "blocker",
   major: "major",
+  high: "major",
+  error: "major",
   minor: "minor",
+  medium: "minor",
+  moderate: "minor",
+  warning: "minor",
+  low: "info",
   info: "info",
+  nit: "info",
+  note: "info",
 };
 
 export interface ParseVerdictOptions {
@@ -163,7 +180,7 @@ function parseFindings(raw: unknown): Finding[] {
     if (!message) continue; // a finding without a message carries no signal
     const severity: Severity =
       typeof f.severity === "string"
-        ? (SEVERITY_VALUES[f.severity.toLowerCase()] ?? "minor")
+        ? (SEVERITY_VALUES[f.severity.trim().toLowerCase()] ?? "minor")
         : "minor";
     const line =
       typeof f.line === "number" && Number.isFinite(f.line) && f.line > 0
