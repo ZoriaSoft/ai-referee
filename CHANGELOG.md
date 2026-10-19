@@ -3,7 +3,39 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased] — round 8 (2026-10-18)
+## [Unreleased] — pre-public hardening (2026-10-19)
+
+### Security
+
+- **Auto-merge is bound to the reviewed commit.** The PR head SHA is pinned
+  once; the diff (`base...<sha>`), prompt context (`git show <sha>:path`) and
+  tests all use it. `--merge` re-reads the PR head, refuses if it moved, and
+  passes `gh pr merge --match-head-commit <sha>`. Auto-merge is refused when
+  tests did not run, and the gate rejects if the test run moved `HEAD` or
+  edited tracked files. Reports carry `target.reviewedSha`; the daemon records
+  the SHA actually reviewed.
+- **No shell for data.** All git/gh calls use argv (`runArgv`) instead of
+  shell strings; PR numbers, SHAs and refs are validated (no leading `-`, no
+  metacharacters, no ranges); `--pr`/`--interval`/`--concurrency` accept
+  digits only. Inline `{prompt}` is refused on Windows.
+- **Prompt-injection hardening.** Diff, file bodies, README and the first
+  referee's text travel inside nonce-tagged untrusted-data blocks; verdicts
+  must echo the nonce (`requireNonce`, default true); contradictory verdicts
+  in one answer fail closed; parse retries re-send the full prompt instead of
+  a bare "reply again". README context comes from the trusted checkout.
+- **Untrusted PR code.** PR-mode tests run with credential-looking env vars
+  stripped (`passSecretsToTests` to opt in); PR-mode CLI reviewers run in an
+  empty temp dir (`reviewerWorkdir: "isolated"`); a PR that edits
+  `.ai-referee.json` gets a warning (the local config is always the one used);
+  `workdir` must stay inside the repo.
+
+### Changed
+
+- Node.js ≥ 22 is required (`Promise.withResolvers`); `engines` was wrong.
+- README: positioning, clean-install quickstart, Security model, comparison,
+  limits. `package-lock.json` is committed; `prepare` builds `dist/`.
+
+## round 8 (2026-10-18)
 
 ### Added
 

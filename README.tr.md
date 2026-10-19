@@ -1,23 +1,34 @@
 # ai-referee
 
-Yapay zekâ ajanları artık el yazısıyla incelenemeyecek kadar çok PR açıyor.
-ai-referee, **yerel ve kendi kendine barındırılan bir merge kapısıdır**: testlerini
-çalıştırır, diff'i herhangi bir ajan CLI'sine (`claude`, `codex`, `gemini`…) veya
-OpenAI uyumlu bir API'ye gönderir ve bir karar döner:
+**Yerel, modelden bağımsız bir merge kapısı: hakem yoksa merge de yok.**
+
+ai-referee testlerini çalıştırır, diff'i herhangi bir ajan CLI'sine (`claude`,
+`codex`, `gemini`…) veya OpenAI uyumlu bir API'ye gönderir ve cevabı çıkış
+koduna çevirir:
 
 ```
 APPROVE → çıkış 0      REJECT → çıkış 1      çalışamadı → çıkış 2
 ```
 
-Hiçbir reviewer cevap veremezse onay vermeyi reddeder. **Hakem yoksa merge de yok.**
+Yorum bırakan bir bot değil, **kapıdır**. Kırık test, okunamayan cevap, zaman
+aşımı ya da kotası biten reviewer zinciri — hepsi REJECT. Senin makinende veya
+sunucunda, zaten giriş yaptığın CLI'larla çalışır; SaaS ya da GitHub Actions
+gerekmez.
 
-## 30 saniyede başlangıç
+## Hızlı başlangıç (temiz kurulum)
+
+Node.js ≥ 22, git ≥ 2.38 ve en az bir reviewer gerekir. Henüz npm'de yok;
+kaynaktan kur:
 
 ```bash
-cd projen
-npx ai-referee@latest init        # .ai-referee.json oluşturur
-# testCommand ve en az bir reviewer ayarla
-npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
+git clone https://github.com/ZoriaSoft/ai-referee.git
+cd ai-referee && npm ci && npm run build && npm link   # `ai-referee` PATH'e girer
+
+cd /projenin/yolu
+ai-referee init          # başlangıç .ai-referee.json yazar
+# testCommand'ı ayarla, elinde olan en az bir reviewer'ı bırak
+ai-referee doctor        # config, reviewer, gh kontrolü
+ai-referee review        # mevcut dalı base'e karşı incele
 ```
 
 Örnek `.ai-referee.json` (yorum serbest):
@@ -82,23 +93,49 @@ npx ai-referee@latest review      # mevcut dalı base'e karşı inceler
   düşen bulgular yalnız ona gider; `"fixer": null` dosyaları düzeltmeden
   muaf tutar. Route'suz dosyalar genel `fixerCommand`'ı kullanır.
 
+## Güvenlik modeli
+
+Ayrıntılar README.md'deki "Security model" bölümünde; özet:
+
+- **Merge, incelenen commit'e bağlıdır.** `--pr` modunda PR head'i tam SHA
+  olarak sabitlenir; diff, prompt bağlamı ve testler o commit üzerinde koşar.
+  `--merge` öncesi head yeniden okunur, değiştiyse merge reddedilir; ayrıca
+  `gh pr merge --match-head-commit <sha>` kullanılır. Testler koşmadıysa
+  otomatik merge yapılmaz. Testler HEAD'i oynatır ya da izlenen dosyaları
+  değiştirirse REJECT.
+- **Testler PR'ın kodunu çalıştırır.** Daemon'ı container/VM/ayrı kullanıcı
+  içinde çalıştır. PR modunda token/anahtar görünümlü ortam değişkenleri test
+  sürecinden silinir (`"passSecretsToTests": true` ile geri açılır).
+- **Config güvenilir taraftan gelir:** `.ai-referee.json` senin checkout'undan
+  okunur, PR'dan değil; PR bu dosyayı değiştirirse raporda uyarı çıkar.
+- **Diff veri, talimat değil:** diff rastgele bir nonce ile işaretlenmiş blok
+  içinde gider; verdict JSON'u bu nonce'u taşımak zorunda
+  (`"requireNonce": true`); aynı cevapta hem APPROVE hem REJECT varsa REJECT.
+  PR modunda CLI reviewer'lar boş bir geçici dizinde çalışır
+  (`"reviewerWorkdir": "isolated"`), PR'ın AGENTS.md/CLAUDE.md dosyalarını
+  okumaz. Bu önlemler riski azaltır, sıfırlamaz.
+- **Veri için shell yok:** git/gh çağrıları argv dizisiyle yapılır; PR
+  numarası, SHA ve ref'ler doğrulanır.
+
 ## Mevcut araçlardan farkı
 
-pr-agent gibi araçlar CI/SaaS üzerinde tavsiye yorumu bırakır; git-ai-review ve
-benzerleri yerel inceler ama kapı koymaz. ai-referee **fail-closed** çalışır:
-ayrıştırılamayan çıktı, ulaşılamayan reviewer ve kırık testlerin hepsi REJECT'tir.
-GitHub Actions gerekmez.
+PR-Agent ve Copilot code review tavsiye niteliğinde yorum bırakır (Copilot
+varsayılan olarak merge'i engellemez); CodeRabbit CLI bir hesap ve servis
+ister. OpticDiff code-reviewer ruhen en yakın araç ve analiz tarafında daha
+zengin; ai-referee'nin farkı testleri kapının içinde koşması, zaten giriş
+yaptığın ajan CLI'larını fallback zinciriyle kullanması ve hiçbir hakem cevap
+vermezse kapıyı kapalı tutması.
 
 ## Sınırlar
 
-- Reviewer diff + README özeti + `contextBudget` kadar tam dosya içeriği görür
-  (dosyalar arası sembol çözümlemesi yok).
-- Komutlar POSIX'te `bash` ile çalışır; Windows'ta `cmd.exe` devreye girer —
-  best-effort destek. Reviewer komutlarında stdin veya `{prompt_file}` tercih
-  et; satır içi `{prompt}` cmd'de kırılgandır (`%VAR%` genişler).
-- PR/daemon modları `gh` CLI ve GitHub `origin` ister.
+- LLM incelemesi sezgisel bir kapıdır, doğruluk ispatı değildir.
+- Prompt injection önlemleri riski azaltır; modeli bağışık yapmaz.
+- Reviewer diff + değişen dosyaların tam içeriğini görür (`contextBudget`);
+  dosyalar arası sembol çözümlemesi yok.
+- PR/daemon modları yalnız GitHub (`gh` CLI, `origin`).
 - `--fix` tek tur ve yalnız yerel hedeflerde.
+- Windows desteği best-effort; orada satır içi `{prompt}` kapalı.
 
 ## Gereksinimler
 
-Node ≥ 20, `git` ≥ 2.38, PR/daemon için `gh`. Lisans: MIT.
+Node ≥ 22, `git` ≥ 2.38, PR/daemon için `gh`. Lisans: MIT.

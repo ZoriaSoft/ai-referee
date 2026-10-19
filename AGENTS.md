@@ -1,6 +1,6 @@
 # ai-referee — agent notes
 
-Local, self-hosted merge gate. TypeScript, Node 20+, zero runtime dependencies.
+Local, self-hosted merge gate. TypeScript, Node 22+, zero runtime dependencies.
 Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 
 ## Layout
@@ -18,7 +18,7 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
 | `src/config.ts` | `.ai-referee.json` loading (lenient JSON: comments + trailing commas) |
 | `src/daemon.ts` | `gh pr list` polling loop, per-PR head-SHA dedupe, report files |
 | `src/hook.ts` | pre-push hook installer (preserves foreign hooks) |
-| `src/git.ts` | git/gh shell wrappers; PR review uses `refs/pull/<n>/head` + temp worktree |
+| `src/git.ts` | git/gh wrappers (argv only, validated PR/SHA/ref inputs); PR review uses `refs/pull/<n>/head` + temp worktree; SHA-bound merge |
 | `src/exec.ts` | platform shell runner (`bash -c` / `cmd /d /s /c`) with timeout + output caps; never throws |
 | `src/loose-json.ts` | comment/trailing-comma-tolerant JSON.parse |
 | `src/report.ts` | Markdown + JSON report rendering |
@@ -40,11 +40,21 @@ Entry point: `src/cli.ts` → `dist/cli.js` (bin: `ai-referee`).
   never flip the verdict. Inline comments only on right-side lines that the
   diff actually shows (`FileDiff.rightLines`).
 - No runtime deps in `dependencies` — stdlib only.
+- **Merge only the reviewed SHA.** Diff, context and tests are bound to the
+  pinned head SHA; `ghMergePr` re-checks the head and passes
+  `--match-head-commit`. Never merge without a test run on that SHA.
+- **No shell for data.** git/gh go through `runArgv`; validate PR numbers,
+  SHAs and refs (`assertPrNumber`/`assertSha`/`assertRef`). `run` (shell) is
+  only for command lines from the user's own config.
+- **Untrusted input stays data.** Diff/file/README text goes inside
+  `untrustedBlock` with the per-review nonce; verdicts are parsed with the
+  nonce; contradictory verdicts fail closed. Config and README are read from
+  the trusted checkout, never the PR worktree.
 
 ## Build/test
 
 Builds and tests run on the sandbox only:
-`cirak-run "npx tsc -p tsconfig.json --noEmit && npx vitest run"`.
+`npm ci && npm run check && npm test && npm run build` (in an isolated sandbox).
 
 Test suite: `test/` — pipeline tests spin up throwaway git repos with fake
 reviewer shell scripts; keep them hermetic (tmpdir only, no network).
