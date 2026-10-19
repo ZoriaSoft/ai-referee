@@ -31,6 +31,13 @@ describe("cliReviewer", () => {
     expect(res.output).toContain("via file content");
   });
 
+  it.skipIf(process.platform === "win32")("refuses an inline {prompt} that would exceed the argv limit", async () => {
+    const reviewer = buildReviewer(cli("echo", "echo {prompt}"));
+    const res = await reviewer.invoke("x".repeat(200_000), process.cwd());
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain("too large for inline {prompt}");
+  });
+
   it("reports missing binary without spawning", async () => {
     const reviewer = buildReviewer(cli("missing", "definitely-not-a-binary-xyz --flag"));
     const res = await reviewer.invoke("p", process.cwd());

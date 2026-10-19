@@ -44,6 +44,8 @@ export function inlinePromptUnsafe(platform: NodeJS.Platform = process.platform)
   return platform === "win32";
 }
 
+/** Safe ceiling below Linux MAX_ARG_STRLEN (131072) for an inline prompt command. */
+export const INLINE_PROMPT_MAX_BYTES = 120_000;
 const REVIEWER_TIMEOUT_DEFAULT = 10 * 60 * 1000;
 const API_TIMEOUT_DEFAULT = 300_000;
 
@@ -89,6 +91,16 @@ function cliReviewer(cfg: ReviewerConfig): Reviewer {
         }
         if (usesInline) {
           cmd = cmd.replaceAll("{prompt}", shellEscape(prompt));
+          // The command line travels as one argv string; Linux caps a single
+          // argument at 128 KiB (MAX_ARG_STRLEN) and spawn fails with E2BIG.
+          if (Buffer.byteLength(cmd, "utf8") > INLINE_PROMPT_MAX_BYTES) {
+            return {
+              ok: false,
+              output: "",
+              detail: `prompt too large for inline {prompt} (${Buffer.byteLength(cmd, "utf8")} bytes); use stdin or {prompt_file}, or lower chunkBudget`,
+              durationMs: Date.now() - started,
+            };
+          }
         }
 
         const res = await run(cmd, {

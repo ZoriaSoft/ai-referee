@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isEntrypoint, splitCommand } from "../src/cli.js";
+import { isEntrypoint, resolveFormat, splitCommand } from "../src/cli.js";
 
 describe("splitCommand", () => {
   it("defaults to review for bare flags and help with no args", () => {
@@ -64,5 +64,15 @@ describe("isEntrypoint", () => {
     } finally {
       await rm(d, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolveFormat", () => {
+  it("defaults by TTY, accepts md as markdown, rejects unknown values", () => {
+    expect(resolveFormat("", true)).toBe("markdown");
+    expect(resolveFormat(undefined, false)).toBe("json");
+    expect(resolveFormat("md", false)).toBe("markdown");
+    expect(resolveFormat("both", false)).toBe("both");
+    expect(resolveFormat("xml", true)).toBeNull();
   });
 });

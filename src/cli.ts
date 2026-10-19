@@ -189,6 +189,18 @@ function parseCommon(rest: string[]) {
   });
 }
 
+/**
+ * Report format from --format: markdown | md | json | both. Empty means the
+ * default (markdown on a TTY, json when piped). Unknown values return null —
+ * they used to produce an empty report.
+ */
+export function resolveFormat(flag: string | undefined, isTTY: boolean): "markdown" | "json" | "both" | null {
+  if (!flag) return isTTY ? "markdown" : "json";
+  if (flag === "md" || flag === "markdown") return "markdown";
+  if (flag === "json" || flag === "both") return flag;
+  return null;
+}
+
 /** Maps --strict/--light to a profile; null means "use config". Errors on both. */
 function profileFromFlags(v: { strict?: boolean; light?: boolean }): "strict" | "light" | null {
   if (v.strict && v.light) {
@@ -212,7 +224,11 @@ async function cmdReview(rest: string[]): Promise<number> {
   const { values: v } = parseCommon(rest);
   const cwd = process.cwd();
   const config = await loadOrDie(cwd, v.config);
-  const format = v.format || (process.stdout.isTTY ? "markdown" : "json");
+  const format = resolveFormat(v.format, process.stdout.isTTY === true);
+  if (format === null) {
+    process.stderr.write(`invalid --format value: ${v.format} (markdown | md | json | both)\n`);
+    return 2;
+  }
   // Digits only: "7abc" or "7;id" must not slip through parseInt.
   const pr = v.pr !== undefined && /^[1-9][0-9]{0,9}$/.test(v.pr) ? Number(v.pr) : undefined;
   if (v.pr !== undefined && pr === undefined) {
