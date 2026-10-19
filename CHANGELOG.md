@@ -3,6 +3,33 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- Timeouts now kill the whole process tree. A test command or reviewer
+  that forked grandchildren used to keep the pipes open, so a hung test
+  suite hung the gate past `testTimeoutMs`. Ctrl-C is forwarded to
+  running children.
+- `hook install` installs into the directory git actually uses
+  (`core.hooksPath`, linked worktrees), puts the gate before an existing
+  hook instead of after it (a foreign `exit 0` skipped the gate), and a
+  re-install no longer drops the merged foreign hook.
+- Light profile: reviewer severities such as `critical`/`high` were read
+  as `minor`, which downgraded real rejections to warnings. Common scales
+  now map onto blocker/major/minor/info.
+- `--format md` (and typos) printed an empty report; `md` is an alias for
+  markdown and unknown values exit 2.
+- Inline `{prompt}` commands above the Linux per-argument limit fail with
+  a clear message instead of `spawn E2BIG`.
+- Stale-review dismissal only touches reviews from the account that posted
+  the new review, not any review containing the marker text.
+
+### Changed
+
+- vitest 5 (dev only) clears the npm audit advisories in the test
+  toolchain. Added `SECURITY.md` and `CONTRIBUTING.md`.
+
 ## [Unreleased] — pre-public hardening (2026-10-19)
 
 ### Security
