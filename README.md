@@ -1,5 +1,7 @@
 # ai-referee
 
+<p align="center"><img src="docs/flow.svg" alt="ai-referee flow: tests, AI review, merge only at the reviewed commit" width="100%"></p>
+
 **A local, model-agnostic merge gate: no referee, no merge.**
 
 ai-referee runs your tests, sends the diff to an LLM through *any* agent CLI

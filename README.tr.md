@@ -1,5 +1,7 @@
 # ai-referee
 
+<p align="center"><img src="docs/flow.svg" alt="ai-referee flow: tests, AI review, merge only at the reviewed commit" width="100%"></p>
+
 **Yerel, modelden bağımsız bir merge kapısı: hakem yoksa merge de yok.**
 
 ai-referee testlerini çalıştırır, diff'i herhangi bir ajan CLI'sine (`claude`,
