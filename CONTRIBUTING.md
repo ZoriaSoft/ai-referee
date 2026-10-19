@@ -33,6 +33,9 @@ These are the product; changes that weaken them need a very good reason.
 - **Reviewer output is untrusted.** Always parse it with `parseVerdict`;
   diff, file and README text go inside `untrustedBlock` with the per-review
   nonce.
+- **One fix round.** Never loop fix and review.
+- **Posting is best-effort.** PR review, comment and status failures are
+  recorded in the report and never flip the verdict.
 - **Exit codes:** 0 APPROVE, 1 REJECT, 2 operational error.
 - **No runtime dependencies.**
 
