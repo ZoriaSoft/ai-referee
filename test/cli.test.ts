@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { splitCommand } from "../src/cli.js";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { isEntrypoint, splitCommand } from "../src/cli.js";
 
 describe("splitCommand", () => {
   it("defaults to review for bare flags and help with no args", () => {
@@ -41,5 +45,24 @@ describe("splitCommand", () => {
     const parsed = splitCommand(["frobnicate", "--light"]);
     expect(parsed.command).toBe("review");
     expect(parsed.rest).toEqual(["frobnicate", "--light"]);
+  });
+});
+
+describe("isEntrypoint", () => {
+  it("matches the module through an npm-style bin symlink", async () => {
+    const d = await mkdtemp(join(tmpdir(), "air-bin-"));
+    try {
+      const real = join(d, "cli.js");
+      await writeFile(real, "");
+      const link = join(d, "ai-referee");
+      await symlink(real, link);
+      const url = pathToFileURL(real).href;
+      expect(isEntrypoint(real, url)).toBe(true);
+      expect(isEntrypoint(link, url)).toBe(true);
+      expect(isEntrypoint(join(d, "other.js"), url)).toBe(false);
+      expect(isEntrypoint(undefined, url)).toBe(false);
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
   });
 });

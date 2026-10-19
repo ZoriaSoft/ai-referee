@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
 import { CONFIG_FILENAME, loadConfig, type Config } from "./config.js";
 import { runDaemon } from "./daemon.js";
 import { runDoctor } from "./doctor.js";
@@ -323,8 +324,23 @@ async function cmdInit(): Promise<number> {
   }
 }
 
+/**
+ * True when `argv1` (process.argv[1]) is this module. npm installs the bin as
+ * a symlink (node_modules/.bin, global prefix, `npm link`), so compare real
+ * paths — a plain URL comparison never matched there and the CLI silently
+ * exited 0 without doing anything, which a pre-push hook reads as APPROVE.
+ */
+export function isEntrypoint(argv1: string | undefined, moduleUrl: string = import.meta.url): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(argv1);
+  } catch {
+    return moduleUrl === pathToFileURL(argv1).href;
+  }
+}
+
 // Entry guard: importing this module (tests) must not run main().
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(process.argv[1])) {
   main().then(
     (code) => process.exit(code),
     (err) => {

@@ -29,6 +29,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `.ai-referee.json` gets a warning (the local config is always the one used);
   `workdir` must stay inside the repo.
 
+### Fixed
+
+- The installed `ai-referee` bin (npm symlink: `.bin`, global prefix,
+  `npm link`) did nothing and exited 0 — the entry guard compared URLs
+  instead of real paths. A pre-push hook read that silent exit as APPROVE.
+
 ### Changed
 
 - Node.js ≥ 22 is required (`Promise.withResolvers`); `engines` was wrong.
